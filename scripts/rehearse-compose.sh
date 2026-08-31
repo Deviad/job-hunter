@@ -47,7 +47,7 @@ cleanup() {
     'rm -rf /etc/searxng/* /etc/searxng/.[!.]* /etc/searxng/..?*' \
     >/dev/null 2>&1 || true
   "${COMPOSE[@]}" down --volumes --timeout 10 >/dev/null 2>&1 || true
-  docker run --rm --entrypoint /bin/sh -v "$REHEARSAL_HOME:/cleanup" "$CLEANUP_IMAGE" \
+  docker run --rm --user root --entrypoint /bin/sh -v "$REHEARSAL_HOME:/cleanup" "$CLEANUP_IMAGE" \
     -c 'rm -rf /cleanup/* /cleanup/.[!.]* /cleanup/..?*' >/dev/null 2>&1 || true
   rm -rf "$REHEARSAL_HOME"
 }
