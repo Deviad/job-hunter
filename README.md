@@ -117,7 +117,7 @@ Common issues:
 
 - All job-search data, credentials, and browser sessions stay on your machine.
 - The installer never reads or transmits personal files.
-- Authenticated browser sessions (LinkedIn, Indeed) belong to you — this project does not bypass CAPTCHA, MFA, or site access controls.
+- Authenticated browser sessions (LinkedIn, Indeed) belong to you — this project does not bypass MFA, or site access controls.
 - See `docs/security-and-privacy.md` for the full policy.
 
 ## License
