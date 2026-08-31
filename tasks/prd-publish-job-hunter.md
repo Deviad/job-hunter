@@ -4,7 +4,7 @@
 
 Publish the active Job Hunter pipeline as a clean public GitHub repository. The release must contain the complete supported Pi skill dependency closure, reproducible code dependencies, a one-command global installer, Docker Compose definitions for browser/search services, and release-safety checks that prevent personal job-hunting data from entering the repository.
 
-The current `/Users/spotted/projects/job-hunter` worktree is an archive of the salary-calculator project, has no Git remote, and tracks personal/runtime artifacts. It is a planning location only and must not be used as the publication source. The active source is currently distributed under `~/.pi/agent/skills/`; implementation will assemble a new repository from reviewed active files without preserving the archive history.
+The current local archive worktree is an archive of the salary-calculator project, has no Git remote, and tracks personal/runtime artifacts. It is a planning location only and must not be used as the publication source. The active source is currently distributed under `~/.pi/agent/skills/`; implementation will assemble a new repository from reviewed active files without preserving the archive history.
 
 ## Goals
 
@@ -12,7 +12,8 @@ The current `/Users/spotted/projects/job-hunter` worktree is an archive of the s
 - Install all bundled Pi skills and code dependencies through one idempotent bootstrap command.
 - Include reproducible manifests and lockfiles rather than checked-in dependency directories.
 - Include Docker Compose configuration for Selenium Chromium and SearXNG while verifying, rather than silently installing, host-level and heavyweight prerequisites.
-- Prevent CVs, databases, credentials, browser state, logs, screenshots, application records, and host-specific paths from entering a release.
+- Prevent CVs, databases, credentials, browser state, logs, screenshots, application records, host-specific paths, and maintainer-specific profile defaults from entering a release.
+- Convert embedded personally identifying work history, education, salary, authorization, and application answers into runtime-loaded user data or synthetic examples; generic job-role taxonomy remains product code.
 - Make a fresh installation diagnosable through the existing Job Hunter doctor workflow.
 
 ## User Stories
@@ -25,8 +26,10 @@ The current `/Users/spotted/projects/job-hunter` worktree is an archive of the s
 
 - [ ] A new repository contains `README.md`, `LICENSE`, `.gitignore`, and `tasks/prd-publish-job-hunter.md`; `test -f` checks for all four files pass.
 - [ ] The MIT license text is present in `LICENSE`; `node scripts/check-release-safety.mjs` reports the license check as passing.
-- [ ] `node scripts/check-release-safety.mjs` exits zero after scanning tracked paths and text for databases, CVs, personal-info caches, credentials, cookies, browser profiles, logs, screenshots, generated application artifacts, `node_modules`, and `/Users/spotted` host paths.
+- [ ] `node scripts/check-release-safety.mjs` exits zero after scanning tracked paths and text for databases, CVs, personal-info caches, credentials, cookies, browser profiles, logs, screenshots, generated application artifacts, `node_modules`, and maintainer-specific absolute user paths.
 - [ ] `node --test test/release-safety.test.mjs` proves the safety gate rejects representative forbidden fixtures and accepts the repository release tree.
+- [ ] `node scripts/check-local-profile-leaks.mjs` exits zero after comparing publishable text against sensitive values from the maintainer's canonical local CV/cache when those files are available; otherwise it reports a skipped maintainer-only gate.
+- [ ] Bundled scripts and documentation contain no personally identifying work history, education, salary, authorization, or application-answer defaults; focused synthetic tests prove profile values are loaded from runtime user data instead. Generic non-identifying job-role taxonomy may remain as product code.
 - [ ] `git log --oneline --all` in the publication repository contains only the clean publication history and no imported archive commits.
 
 ### US-002: Bundle the complete supported Pi skill closure
@@ -38,7 +41,7 @@ The current `/Users/spotted/projects/job-hunter` worktree is an archive of the s
 - [ ] `skills/` contains reviewed copies of these 14 observed active skills: `job-hunter`, `linkedin-job-search`, `indeed-job-search`, `job-match-scorer`, `salary-calculator`, `auto-job-application`, `captcha-resolution`, `qwen-screenshot-debug`, `selenium-container-visual-click-recovery`, `obscura-mcp-repair`, `pi-mcp-repair`, `brave-obscura-session`, `docx`, and `pdf`; `node scripts/verify-skill-closure.mjs` lists all 14 and exits zero.
 - [ ] Every bundled skill contains a valid `SKILL.md`; `node scripts/verify-skill-closure.mjs` reports no missing or malformed skill entry point.
 - [ ] Every explicit local skill reference from a bundled `SKILL.md` resolves to another bundled skill or an allowlisted Pi platform integration; `node --test test/skill-closure.test.mjs` passes.
-- [ ] Bundled scripts resolve sibling skills through the selected installation root rather than `/Users/spotted`, `.hermes`, or the archived project; `node scripts/check-release-safety.mjs` reports no forbidden path references.
+- [ ] Bundled scripts resolve sibling skills through the selected installation root rather than a maintainer home path, a legacy alternate-profile skill root, or the archived project; `node scripts/check-release-safety.mjs` reports no forbidden path references.
 - [ ] A generated `docs/dependency-matrix.md` identifies each skill as core, required support, or platform integration and names its code, executable, service, and MCP prerequisites; `node scripts/verify-dependency-matrix.mjs` exits zero against the shipped files.
 
 ### US-003: Provide reproducible code dependencies
@@ -118,6 +121,7 @@ The current `/Users/spotted/projects/job-hunter` worktree is an archive of the s
 - **FR-15:** Release artifacts must be checksummed and must pass the same safety scan as the source tree.
 - **FR-16:** Documentation must state that authenticated sessions belong to the user and that the project does not bypass CAPTCHA, MFA, access controls, or site restrictions.
 - **FR-17:** The GitHub issue containing this PRD must be created before implementation source is added, and implementation must occur on `issue-<issue-number>`.
+- **FR-18:** Personally identifying profile values embedded in active source inputs must be removed or replaced with synthetic fixtures; user-specific behavior must read the installing user's canonical workspace data at runtime. Generic job-role taxonomy is product code, not profile data.
 
 ## Non-Goals
 
@@ -134,7 +138,8 @@ The current `/Users/spotted/projects/job-hunter` worktree is an archive of the s
 ## Design / Technical Considerations
 
 - Use a monorepo with `skills/<skill-name>/` as the source of truth, plus root-level installer, verification, documentation, Compose, and CI files.
-- Treat the current global skill directories as review inputs, not files to copy blindly. Exclude `.DS_Store`, caches, generated artifacts, local evidence, personal data, and stale profile-specific paths.
+- Treat the current global skill directories as review inputs, not files to copy blindly. Exclude `.DS_Store`, caches, generated artifacts, local evidence, personal data, stale profile-specific paths, and personally identifying defaults embedded in scripts, fixtures, or skill prose.
+- User-specific behavior must load work history, education, salary, authorization, and application answers from the installing user's canonical workspace. Generic job-role taxonomy may remain in source. Repository examples and tests use visibly synthetic identities and employers.
 - Use a generated installation manifest containing file paths and content hashes so upgrades and uninstall are precise and user files are never removed accidentally.
 - Prefer one root Node lockfile unless a bundled skill has a justified isolated runtime. Preserve PEP 723 `uv run` helpers for DOCX/PDF portability.
 - Classify integrations such as Obscura MCP, Apple Mail MCP, authenticated Chromium, and LM Studio by the workflow stages that need them. A missing optional integration must degrade only its dependent feature.

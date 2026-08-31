@@ -1,0 +1,16 @@
+{
+  "title": "Senior Software Engineer",
+  "company": "Acme Corp",
+  "location": "San Francisco, CA",
+  "applicants": 25,
+  "description": "We are looking for a Senior Software Engineer with strong experience in distributed systems. Required: Fluent in English. Nice to have: German language skills.",
+  "applicationLinks": ["https://apply.acme.com/12345"],
+  "recruiter": "Jane Smith",
+  "recruiterEmail": "candidate@example.invalid",
+  "recruiterProfileLink": "https://www.linkedin.com/in/janesmith",
+  "jobPostingDate": null,
+  "languageRequirements": {
+    "required": ["English"],
+    "niceToHave": ["German"]
+  }
+}

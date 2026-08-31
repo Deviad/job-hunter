@@ -1,0 +1,61 @@
+# Dependencies
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+uv.lock
+
+# Runtime artifacts
+*.sqlite
+*.sqlite3
+*.docx
+*.pdf
+*.xlsx
+*.csv
+!examples/**/*.docx
+personal-info-cache.json
+apply_logs/
+logs/
+backups/
+screenshots/
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.log
+
+# Browser state
+chromium-profile/
+chromium_profile/
+selenium_chrome_profile/
+searxng/
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Job-hunter runtime (never tracked)
+.job-hunter/
+
+# Agent evidence (local, never published)
+agent-output/
+
+# Build/release
+dist/
+tmp/
+*.tar.gz
+*.zip

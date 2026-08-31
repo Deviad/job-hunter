@@ -1,0 +1,13 @@
+{
+  "fullName": "Jane Doe",
+  "email": "jane.doe@example.com",
+  "phone": "+44 7700 000000",
+  "location": "London, United Kingdom",
+  "workAuthorization": "Right to work in UK",
+  "noticePeriod": "4 weeks",
+  "currentSalary": 0,
+  "desiredSalary": 0,
+  "demographics": {
+    "gender": "Prefer not to say"
+  }
+}

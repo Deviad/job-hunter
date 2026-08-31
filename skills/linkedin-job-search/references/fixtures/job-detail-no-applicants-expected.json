@@ -1,0 +1,16 @@
+{
+  "title": "Junior Developer",
+  "company": "StartupCo",
+  "location": "Remote",
+  "applicants": null,
+  "description": "Build and maintain web applications. Requirements: English proficiency. No foreign language requirement.",
+  "applicationLinks": ["https://startupco.apply.io/apply"],
+  "recruiter": null,
+  "recruiterEmail": null,
+  "recruiterProfileLink": null,
+  "jobPostingDate": "Posted 3 days ago",
+  "languageRequirements": {
+    "required": ["English"],
+    "niceToHave": []
+  }
+}

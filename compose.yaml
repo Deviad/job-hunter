@@ -1,0 +1,72 @@
+# Job Hunter — Selenium Chromium + SearXNG
+#
+# Usage:
+#   docker compose up -d          # start services
+#   docker compose down           # stop (no data loss)
+#   bash scripts/rehearse-compose.sh  # bounded health check + teardown
+#
+# Prerequisites: Docker with Compose support.
+# No credentials are embedded. Authenticated browser sessions are user-managed.
+
+services:
+  selenium-chromium:
+    image: selenium/standalone-chromium:4.44@sha256:8c5a8629c96104c0d73df94c6437af9ab9059c4e16aa32e35b330b7d77defe0b
+    shm_size: "2gb"
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SELENIUM_PORT:-4444}:4444"   # Selenium WebDriver
+      - "127.0.0.1:${NOVNC_PORT:-7900}:7900"       # noVNC web UI
+      - "127.0.0.1:${CDP_PORT:-9225}:9222"         # Chrome DevTools Protocol (CDP)
+    entrypoint:
+      - "/bin/sh"
+      - "-c"
+      - |
+        # Ensure xdotool is available for visual-click-recovery workflow.
+        if ! command -v xdotool >/dev/null 2>&1; then
+          (sudo apt-get update -qq && sudo apt-get install -y -qq xdotool) \
+            || echo "WARN: xdotool install failed; visual click recovery degraded"
+        fi
+        exec /opt/bin/entry_point.sh
+    environment:
+      - SE_START_XVFB=true
+      - SE_START_VNC=true
+      - SE_START_NO_VNC=true
+      - SE_VNC_NO_PASSWORD=true
+      - SE_NO_VNC_PORT=7900
+      - SE_VNC_PORT=5900
+      - SE_SCREEN_WIDTH=1920
+      - SE_SCREEN_HEIGHT=1080
+    volumes:
+      - "${JOBHUNTER_HOME:-${HOME}/.job-hunter}:/home/seluser/job-hunter"
+      - "${SELENIUM_PROFILE_DIR:-${JOBHUNTER_HOME:-${HOME}/.job-hunter}/chromium-profile}:/home/seluser/.config/google-chrome"
+      - "./docker/selenium/cdp_proxy.py:/opt/selenium/cdp_proxy.py:ro"
+      - "./docker/selenium/manual-chrome.conf:/etc/supervisor/conf.d/manual-chrome.conf:ro"
+    networks:
+      - jobhunter
+
+  searxng:
+    image: searxng/searxng:latest@sha256:b36af7984b87191b595bc5301418ed6432c047668a4547ab531a7439b816fac3
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SEARXNG_PORT:-8888}:8080"
+    environment:
+      SEARXNG_BASE_URL: http://localhost:${SEARXNG_PORT:-8888}/
+      SEARXNG_LIMITER: "false"
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-}
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    volumes:
+      - "${JOBHUNTER_HOME:-${HOME}/.job-hunter}/searxng:/etc/searxng"
+    tmpfs:
+      - /tmp
+    networks:
+      - jobhunter
+
+networks:
+  jobhunter:
+    name: jobhunter
+    driver: bridge
