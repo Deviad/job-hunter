@@ -1,0 +1,16 @@
+{
+  "title": "Produktmanager",
+  "company": "BerlinTech GmbH",
+  "location": "Berlin, Germany",
+  "applicants": 8,
+  "description": "Verantwortlich für die Produktentwicklung und Roadmap. Required: Fluent in German (C1). Must speak German. English is a plus.",
+  "applicationLinks": ["https://berlintech.apply.com/123"],
+  "recruiter": "Anna Mueller",
+  "recruiterEmail": "candidate@example.invalid",
+  "recruiterProfileLink": "https://www.linkedin.com/in/annamueller",
+  "jobPostingDate": "Posted on 2025-04-15",
+  "languageRequirements": {
+    "required": ["German"],
+    "niceToHave": ["English"]
+  }
+}

@@ -1,0 +1,154 @@
+{
+  "schemaVersion": 1,
+  "name": "role-classification-gold-v1",
+  "reviewed": true,
+  "cases": [
+    {
+      "id": "exact-prototype",
+      "split": "prototype",
+      "title": "Principal AI Architect",
+      "descriptionText": "Own production AI system architecture, platform decisions, design authority, and LLM deployment patterns.",
+      "expectedCategory": "exact-architecture",
+      "expectedEligible": true,
+      "reviewReason": "Explicit AI architecture ownership and production authority."
+    },
+    {
+      "id": "exact-applied-eval",
+      "split": "evaluation",
+      "title": "Applied AI Architect, Digital Natives",
+      "descriptionText": "Define AI architectural patterns, deploy OpenAI APIs, and build production prototypes, including building and presenting demos.",
+      "expectedCategory": "exact-architecture",
+      "expectedEligible": true,
+      "unknownTitle": true,
+      "reviewReason": "Applied AI role has architecture and implementation authority; software building is not construction."
+    },
+    {
+      "id": "adjacent-prototype",
+      "split": "prototype",
+      "title": "Staff AI Engineer",
+      "descriptionText": "Lead production LLM system design, platform decisions, implementation standards, and technical direction.",
+      "expectedCategory": "adjacent-technical",
+      "expectedEligible": true,
+      "reviewReason": "Adjacent engineering title with architecture-grade technical authority."
+    },
+    {
+      "id": "adjacent-forward-eval",
+      "split": "evaluation",
+      "title": "Forward Deployed Architect",
+      "descriptionText": "Design and deliver production AI systems while owning customer architecture and implementation decisions.",
+      "expectedCategory": "adjacent-technical",
+      "expectedEligible": true,
+      "unknownTitle": true,
+      "reviewReason": "Forward-deployed title is eligible because duties own technical architecture and delivery."
+    },
+    {
+      "id": "leadership-prototype",
+      "split": "prototype",
+      "title": "Head of AI Engineering",
+      "descriptionText": "Lead multiple AI engineering teams and own platform strategy, architecture standards, hiring, and technical roadmap.",
+      "expectedCategory": "leadership",
+      "expectedEligible": true,
+      "reviewReason": "Multi-team leadership retains technical architecture ownership."
+    },
+    {
+      "id": "leadership-eval",
+      "split": "evaluation",
+      "title": "Director of AI Platform",
+      "descriptionText": "Manage three platform teams and remain accountable for production AI architecture, engineering standards, and technical direction.",
+      "expectedCategory": "leadership",
+      "expectedEligible": true,
+      "reviewReason": "Organizational scope and architecture accountability support progression."
+    },
+    {
+      "id": "customer-prototype",
+      "split": "prototype",
+      "title": "AI Customer Engineer",
+      "descriptionText": "Design customer AI architectures, implement integrations, own technical decisions, and deploy production LLM solutions.",
+      "expectedCategory": "customer-facing",
+      "expectedEligible": true,
+      "reviewReason": "Customer-facing role is delivery-led and technically authoritative."
+    },
+    {
+      "id": "customer-solutions-eval",
+      "split": "evaluation",
+      "title": "Solutions Engineer — AI",
+      "descriptionText": "Own production AI system architecture, cloud integration, implementation design, and technical decisions for customers.",
+      "expectedCategory": "customer-facing",
+      "expectedEligible": true,
+      "unknownTitle": true,
+      "reviewReason": "Solutions role has substantial architecture and implementation authority."
+    },
+    {
+      "id": "data-prototype",
+      "split": "prototype",
+      "title": "Data & AI Architect",
+      "descriptionText": "Design AI architecture with supporting lakehouse, data modelling, governance, and production ML platform responsibilities.",
+      "expectedCategory": "data-stretch",
+      "expectedEligible": true,
+      "reviewReason": "AI architecture is central while specialist data scope remains a stretch."
+    },
+    {
+      "id": "data-eval",
+      "split": "evaluation",
+      "title": "AI and Data Platform Architect",
+      "descriptionText": "Own LLM platform architecture plus Snowflake, Databricks, data governance, and production integration decisions.",
+      "expectedCategory": "data-stretch",
+      "expectedEligible": true,
+      "reviewReason": "Architecture is relevant but carries material data-domain requirements."
+    },
+    {
+      "id": "generic-negative-prototype",
+      "split": "prototype",
+      "title": "Backend Software Engineer",
+      "descriptionText": "Implement application features, APIs, unit tests, and maintenance tasks without AI architecture ownership.",
+      "expectedCategory": "generic-engineering-negative",
+      "expectedEligible": false,
+      "reviewReason": "Generic software engineering has no AI architecture or technical-leadership scope."
+    },
+    {
+      "id": "generic-negative-eval",
+      "split": "evaluation",
+      "title": "Software Engineer",
+      "descriptionText": "Build web services and resolve tickets under an existing architecture without AI platform decisions.",
+      "expectedCategory": "generic-engineering-negative",
+      "expectedEligible": false,
+      "reviewReason": "Always-excluded generic software-engineer title."
+    },
+    {
+      "id": "quota-negative-prototype",
+      "split": "prototype",
+      "title": "AI Sales Executive",
+      "descriptionText": "Own revenue quota, sales pipeline, commission targets, and commercial negotiations for AI products.",
+      "expectedCategory": "quota-sales-negative",
+      "expectedEligible": false,
+      "reviewReason": "Quota-led commercial ownership is a hard exclusion."
+    },
+    {
+      "id": "quota-negative-eval",
+      "split": "evaluation",
+      "title": "Forward Deployed Architect",
+      "descriptionText": "Carry sales quota, manage pipeline, present demos, and close commercial deals without implementation authority.",
+      "expectedCategory": "quota-sales-negative",
+      "expectedEligible": false,
+      "reviewReason": "Title does not overcome quota-led, non-technical responsibilities."
+    },
+    {
+      "id": "building-negative-prototype",
+      "split": "prototype",
+      "title": "Building Architect",
+      "descriptionText": "Produce BIM and Revit models for construction, structural design, and real-estate development.",
+      "expectedCategory": "building-bim-negative",
+      "expectedEligible": false,
+      "reviewReason": "Construction and BIM responsibilities are outside software architecture."
+    },
+    {
+      "id": "building-negative-eval",
+      "split": "evaluation",
+      "title": "AI Building Architect",
+      "descriptionText": "Use AI tools for BIM, Revit, construction documentation, and structural building design.",
+      "expectedCategory": "building-bim-negative",
+      "expectedEligible": false,
+      "reviewReason": "AI wording does not override construction-domain duties."
+    }
+  ]
+}

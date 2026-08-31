@@ -1,0 +1,16 @@
+{
+  "title": "Data Analyst",
+  "company": "DataWorks Inc",
+  "location": "New York, NY",
+  "applicants": 12,
+  "description": "Analyze data to drive business decisions. Requirements: Fluent English. No other language required.",
+  "applicationLinks": [],
+  "recruiter": "Bob Johnson",
+  "recruiterEmail": "candidate@example.invalid",
+  "recruiterProfileLink": "https://www.linkedin.com/in/bobjohnson",
+  "jobPostingDate": "Posted 2 weeks ago",
+  "languageRequirements": {
+    "required": ["English"],
+    "niceToHave": []
+  }
+}

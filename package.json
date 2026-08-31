@@ -1,0 +1,22 @@
+{
+  "name": "job-hunter",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Pi Job Hunter — complete skill closure with idempotent installer",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:skills": "node scripts/test-installed-skills.mjs",
+    "install:global": "node scripts/install.mjs",
+    "verify-runtime": "node scripts/verify-runtime-dependencies.mjs",
+    "verify:release": "node scripts/check-release-safety.mjs && node scripts/check-local-profile-leaks.mjs && node scripts/verify-skill-closure.mjs && node scripts/verify-dependency-matrix.mjs && node scripts/check-doc-commands.mjs && node scripts/check-required-doc-sections.mjs",
+    "rehearse:compose": "bash scripts/rehearse-compose.sh"
+  },
+  "dependencies": {
+    "better-sqlite3": "12.10.0",
+    "ws": "8.21.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

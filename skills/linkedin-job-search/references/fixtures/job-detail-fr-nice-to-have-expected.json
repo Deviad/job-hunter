@@ -1,0 +1,16 @@
+{
+  "title": "Marketing Coordinator",
+  "company": "GlobalBrands",
+  "location": "Paris, France",
+  "applicants": 3,
+  "description": "Coordinate marketing campaigns across European markets. Required: Fluent English. French is a nice to have but not required.",
+  "applicationLinks": [],
+  "recruiter": "Claire Dubois",
+  "recruiterEmail": "candidate@example.invalid",
+  "recruiterProfileLink": "https://www.linkedin.com/in/clairedubois",
+  "jobPostingDate": "Posted 1 week ago",
+  "languageRequirements": {
+    "required": ["English"],
+    "niceToHave": ["French"]
+  }
+}

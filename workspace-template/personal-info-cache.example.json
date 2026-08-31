@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 2,
+  "lastUpdated": null,
+  "purpose": "Cache user-provided job-application answers that are not normally present in the CV. Use to pre-fill future applications, but verify when context-specific or legally sensitive.",
+  "profile": {
+    "firstName": "",
+    "lastName": "",
+    "email": "",
+    "phone": "",
+    "website": ""
+  },
+  "workHistory": [],
+  "education": [],
+  "applicationPreferences": {},
+  "workAuthorization": {},
+  "companySpecific": {},
+  "portalCredentials": {},
+  "notes": "",
+  "rolePreferences": {}
+}
