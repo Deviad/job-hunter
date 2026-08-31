@@ -32,6 +32,7 @@ mkdir -p "$REHEARSAL_HOME/chromium-profile" "$REHEARSAL_HOME/searxng"
 chmod 0777 "$REHEARSAL_HOME/chromium-profile" "$REHEARSAL_HOME/searxng"
 
 COMPOSE=(docker compose -p "$PROJECT_NAME" -f "$COMPOSE_DIR/compose.yaml")
+CLEANUP_IMAGE="selenium/standalone-chromium:4.44@sha256:8c5a8629c96104c0d73df94c6437af9ab9059c4e16aa32e35b330b7d77defe0b"
 
 info() { printf '[INFO]  %s\n' "$*"; }
 pass() { PASS=$((PASS + 1)); printf '[PASS]  %s\n' "$*"; }
@@ -46,6 +47,8 @@ cleanup() {
     'rm -rf /etc/searxng/* /etc/searxng/.[!.]* /etc/searxng/..?*' \
     >/dev/null 2>&1 || true
   "${COMPOSE[@]}" down --volumes --timeout 10 >/dev/null 2>&1 || true
+  docker run --rm --entrypoint /bin/sh -v "$REHEARSAL_HOME:/cleanup" "$CLEANUP_IMAGE" \
+    -c 'rm -rf /cleanup/* /cleanup/.[!.]* /cleanup/..?*' >/dev/null 2>&1 || true
   rm -rf "$REHEARSAL_HOME"
 }
 trap cleanup EXIT
