@@ -39,6 +39,12 @@ fail() { FAIL=$((FAIL + 1)); printf '[FAIL]  %s\n' "$*"; }
 
 cleanup() {
   info "Tearing down isolated rehearsal"
+  "${COMPOSE[@]}" exec -T -u root selenium-chromium sh -c \
+    'rm -rf /home/seluser/.config/google-chrome/* /home/seluser/.config/google-chrome/.[!.]* /home/seluser/.config/google-chrome/..?*' \
+    >/dev/null 2>&1 || true
+  "${COMPOSE[@]}" exec -T -u root searxng sh -c \
+    'rm -rf /etc/searxng/* /etc/searxng/.[!.]* /etc/searxng/..?*' \
+    >/dev/null 2>&1 || true
   "${COMPOSE[@]}" down --volumes --timeout 10 >/dev/null 2>&1 || true
   rm -rf "$REHEARSAL_HOME"
 }
