@@ -8,7 +8,7 @@ const ROLE_LABELS = Object.freeze([
   'Out of scope',
 ]);
 
-const ROLE_TAXONOMY_VERSION = '1';
+const ROLE_TAXONOMY_VERSION = '2';
 
 export { ROLE_LABELS, ROLE_TAXONOMY_VERSION };
 
@@ -92,7 +92,11 @@ const DATA_PATTERNS = [
 ];
 
 const NON_SOFTWARE_ARCHITECTURE_PATTERN = /\b(?:building|construction|interior|landscape|civil|structural|mechanical|electrical|bim|revit|autocad|architectural design|real estate)\b/;
-const CONSTRUCTION_DOMAIN_BODY_PATTERN = /\b(?:construction|bim|revit|autocad|civil(?: engineering)?|structural(?: engineering)?|interior(?: design| architecture)?|landscape(?: architecture| design)?|mechanical(?: engineering)?|electrical(?: engineering)?|architectural design|real estate)\b/;
+// Construction evidence must be a qualified discipline ("structural engineering",
+// "landscape design") or a built-environment artefact (BIM/Revit/AutoCAD/shop drawings);
+// a bare discipline word is ordinary software prose. See references/role-taxonomy.md
+// § Non-software architecture boundary.
+const CONSTRUCTION_DOMAIN_BODY_PATTERN = /\b(?:bim|revit|autocad|architectural design|shop drawings?)\b|\b(?:civil|structural|mechanical|electrical)\s+(?:engineering|engineer|engineers)\b|\b(?:interior|landscape)\s+(?:design|architecture|architect)\b|\b(?:construction|real estate)\s+(?:drawings?|site|sites|projects?|designs?|development|developers?|industry|sector|companies|company|management|works)\b/;
 const GENERIC_DATA_ARCHITECTURE_TITLE_PATTERN = /\b(?:data|data platform|data warehouse|data lakehouse)\s+(?:architect|architecture)(?:\s+(?:lead|manager|director))?\b/;
 const SALES_TITLE_PATTERN = /\b(?:account executive|sales executive|sales director|business development representative|sales manager|commercial director)\b/;
 const QUOTA_OWNERSHIP_PATTERN = /\b(?:quota[- ](?:led|carrying|bearing)|sales quota|revenue quota|commission[- ]based|(?:own|owns|carry|carries|responsible for|accountable for|deliver|deliver on|meet|exceed)\s+(?:the\s+)?(?:sales|revenue)?\s*quota|(?:own|owns|responsible for|accountable for|deliver|meet|exceed)\s+(?:sales|revenue)\s+targets?)\b/;
@@ -333,8 +337,14 @@ function classifyRole(input = {}) {
   const bodyHasAi = hasAny(body, AI_TOKENS);
   const adjacentTitle = matchesAny(title, ADJACENT_TITLE_PATTERNS);
   const titleHasArchitecture = /\b(?:architect|architecture)\b/.test(title);
+  // A technical-architecture denial must be stated next to both an ownership noun and a
+  // technical noun ("not own the architecture", "no architecture ownership"). Proximity
+  // alone misreads governance rules ("no uncertified agent reaches production … platform
+  // service") and no-quota disclaimers ("without quota ownership") as denials.
+  const deniesTechnicalArchitecture = /\b(?:no|without|lack(?:s)? of|not)\b[^.\n]{0,30}\b(?:ownership|owner|owns|owning|own|responsibilit\w+|responsible|authority|accountab\w+|exposure|involvement)\b[^.\n]{0,25}\b(?:technical|architecture|architectural|platform|implementation|production|system|systems)\b/.test(body)
+    || /\b(?:no|without|lack(?:s)? of|not)\b[^.\n]{0,30}\b(?:technical|architecture|architectural|platform|implementation|production|system|systems)\b[^.\n]{0,25}\b(?:ownership|owner|owns|owning|own|responsibilit\w+|responsible|authority|accountab\w+|exposure|involvement)\b/.test(body);
   const technicalDenial = /\b(?:no|without|lack(?:s)? of|not)\s+(?:technical|system|systems|production|platform|architecture|architectural|implementation)\b/.test(body)
-    || /\bno\b.{0,80}\b(?:technical|architecture|platform|implementation)\b/.test(body);
+    || deniesTechnicalArchitecture;
   const aiResponsibility = bodyHasAi && !technicalDenial && AI_ARCHITECTURE_CONTEXT_PATTERN.test(body);
   const aiCentral = titleHasAi || aiResponsibility;
   const technicalArchitecture = !technicalDenial && (hasAny(allEvidence, ARCHITECTURE_TOKENS) || matchesAny(allEvidence, [TECHNICAL_AUTHORITY_PATTERN]));
@@ -370,7 +380,14 @@ function classifyRole(input = {}) {
   if (GENERIC_DATA_ARCHITECTURE_TITLE_PATTERN.test(title) && !dataRoleTitle) exclusion.push('generic data-architecture title');
   if (NON_SOFTWARE_ARCHITECTURE_PATTERN.test(title)) exclusion.push('non-software architecture title');
   const nonSoftwareBody = titleHasArchitecture && CONSTRUCTION_DOMAIN_BODY_PATTERN.test(body);
-  if (nonSoftwareBody) exclusion.push('non-software architecture responsibilities');
+  // Body-side construction wording yields to technical AI architecture evidence, per the
+  // doc's eligibility carve-out; title-side vocabulary still excludes, so an explicit
+  // construction title such as `AI Building Architect` is never rescued.
+  const nonSoftwareBodyDecisive = nonSoftwareBody && !aiArchitecture;
+  if (nonSoftwareBodyDecisive) exclusion.push('non-software architecture responsibilities');
+  if (nonSoftwareBody && !nonSoftwareBodyDecisive) {
+    descriptionSignals.push('construction-domain wording present, not decisive because technical AI architecture evidence exists');
+  }
   if (SALES_TITLE_PATTERN.test(title) || QUOTA_OWNERSHIP_PATTERN.test(title) || QUOTA_OWNERSHIP_PATTERN.test(body)) exclusion.push('quota-led or sales-led commercial role');
 
   const leadWithPeopleScope = /\b(?:ai engineering|ai platform|ml platform|ai technical) lead\b/.test(title)
@@ -484,7 +501,10 @@ function classifyRole(input = {}) {
     && !(coreGovernanceArchitecture && !POLICY_PATTERN.test(allEvidence));
 
   if (isConditional) {
-    if (!technicalOwnership) {
+    // Eligibility in this branch rests on substantial technical architecture or
+    // implementation authority; hasTechnicalOwnership's verb list omits design/scale/guide,
+    // so aiArchitecture plus technicalArchitecture is the corroborating evidence.
+    if (!technicalOwnership && !(aiArchitecture && technicalArchitecture)) {
       return buildResult({
         label: 'Out of scope',
         confidence: Math.max(baseConfidence, 0.76),
