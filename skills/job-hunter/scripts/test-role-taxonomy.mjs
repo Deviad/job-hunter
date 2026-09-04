@@ -188,6 +188,74 @@ const cases = [
     input: { title: 'AI Building Architect', descriptionText: 'Design construction and BIM projects.' },
     label: 'Out of scope',
   },
+  // L5 — construction exclusion requires qualified, built-environment evidence, and body
+  // wording never vetoes a role with technical AI architecture evidence.
+  {
+    name: 'structural tests in software prose is not structural engineering',
+    input: {
+      title: 'Agentic AI Architect',
+      descriptionText: 'Own the reference architecture for agentic AI platforms and define technical direction for production LLM systems. Enforce architecture mechanically (structural tests, linting rules, dependency-layer checks) rather than by manual review.',
+    },
+    label: 'Exact architecture',
+  },
+  {
+    name: 'fast-evolving AI landscape is not landscape architecture',
+    input: {
+      title: 'AI Large Language Model (LLM) Technology Architect',
+      descriptionText: 'Design patterns, frameworks and technologies across the fast-evolving AI landscape, balancing innovation with enterprise-grade reliability. You will own generative AI architecture and platform decisions for production systems.',
+    },
+    label: 'Exact architecture',
+  },
+  {
+    name: 'pre-sales AI architect with delivery authority is not excluded',
+    input: {
+      title: 'AI Senior Solutions Architect, Global Advanced Services',
+      descriptionText: 'As a catalyst on the Advanced Services Innovation team you will design, pilot, and scale the cutting-edge AI architecture that powers enterprise solutions. Cross-functional technical leadership: guiding product, sales, and delivery teams toward a unified technical strategy.',
+    },
+    label: 'Exact architecture',
+  },
+  {
+    name: 'client-sector construction wording does not veto an AI architecture role',
+    input: {
+      title: 'AI Solution Architect',
+      descriptionText: 'Own AI solution architecture for client engagements across the civil engineering and structural engineering sectors. Define technical direction and platform decisions for production generative AI systems.',
+    },
+    label: 'Exact architecture',
+  },
+  {
+    name: 'qualified construction body evidence still excluded',
+    input: {
+      title: 'Solution Architect',
+      descriptionText: 'Produce construction drawings and shop drawings, chair coordination with the structural engineering and civil engineering consultants, and review architectural design packages on live project sites.',
+    },
+    label: 'Out of scope',
+  },
+  {
+    name: 'interior and landscape design body evidence still excluded',
+    input: {
+      title: 'Architect',
+      descriptionText: 'Lead interior design and landscape architecture packages for mixed-use developments, coordinating Revit models with the construction team.',
+    },
+    label: 'Out of scope',
+  },
+  // L5c — a stated denial of architecture ownership still denies; governance prose that
+  // merely puts "no" near "production"/"platform" does not.
+  {
+    name: 'governance rule about production is not a denial of architecture scope',
+    input: {
+      title: 'AI Architect, Trading Platform',
+      descriptionText: 'We shape and articulate the enterprise AI strategy with CIOs and CTOs. You will run a certification model that mandates no uncertified agent reaches production. Define memory as a first-class abstracted platform service, and own the architecture roadmap.',
+    },
+    label: 'Conditional',
+  },
+  {
+    name: 'stated denial of architecture ownership excludes',
+    input: {
+      title: 'AI Architect, Trading Platform',
+      descriptionText: 'We shape and articulate the enterprise AI strategy with CIOs and CTOs. You will not own the architecture or the technical decisions, and a separate platform group holds that authority. Deliver roadmaps and reports.',
+    },
+    label: 'Out of scope',
+  },
   {
     name: 'generic architect without AI central rejected',
     input: { title: 'Enterprise Architect', descriptionText: 'Own ERP, infrastructure, and business systems architecture.' },
@@ -393,6 +461,25 @@ assert.deepEqual(expandRoleQueries({}), [], 'missing query seed returns empty');
 assert.ok(!expandRoleQueries({ targetRole: 'AI Architect', similarRoles: ['Lead Software Engineer — AI', 'Principal Data Architect'], maxQueries: 32 }).some((query) => /software engineer|data architect/i.test(query)), 'forbidden query families are filtered');
 
 assert.deepEqual(classifyRole(withQuery), classifyRole(withQuery), 'classification and reason are deterministic');
+
+// L5: the overridden body wording stays visible as a signal instead of vanishing, and the
+// rules version is bumped so rows classified by the previous rules read as stale.
+const overridden = classifyRole({
+  title: 'AI Solution Architect',
+  descriptionText: 'Own AI solution architecture for client engagements across the civil engineering and structural engineering sectors. Define technical direction and platform decisions for production generative AI systems.',
+});
+assert.equal(overridden.label, 'Exact architecture');
+assert.ok(
+  overridden.signals.descriptionSignals.some((signal) => /construction-domain wording.*not decisive/.test(signal)),
+  'non-decisive construction wording is recorded as a description signal',
+);
+assert.deepEqual(overridden.signals.exclusions, [], 'non-decisive construction wording is not an exclusion');
+assert.equal(ROLE_TAXONOMY_VERSION, '2', 'taxonomy version bumped for the L5 rules');
+// The two L5c cases must differ on exactly the signal that drives the branch.
+const governanceProse = classifyRole(cases.find((item) => item.name.startsWith('governance rule')).input);
+const statedDenial = classifyRole(cases.find((item) => item.name.startsWith('stated denial')).input);
+assert.equal(governanceProse.signals.technicalArchitecture, true, 'governance prose must not clear technicalArchitecture');
+assert.equal(statedDenial.signals.technicalArchitecture, false, 'a stated ownership denial must clear technicalArchitecture');
 assert.throws(() => assertRoleClassification({ ...withQuery, confidence: 2 }), /confidence/);
 assert.throws(() => assertRoleClassification({ ...withQuery, label: 'unknown' }), /Unknown/);
 assert.throws(() => assertRoleClassification({ ...withQuery, reason: { ...withQuery.reason, evidence: 'not-an-array' } }), /evidence/);

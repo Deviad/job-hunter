@@ -97,9 +97,19 @@ try {
   assert.ok(report.taxonomyVersion);
   assert.match(report.fixture.sha256, /^[a-f0-9]{64}$/);
   assert.equal(report.embeddingDimensions, 8);
-  assert.deepEqual(report.confusionMatrix, { truePositive: 5, trueNegative: 3, falsePositive: 0, falseNegative: 0 });
+  // Counts derive from the gold set's prototype split so adding reviewed cases does not
+  // require re-deriving literals; falsePositive/falseNegative stay 0 because that is the
+  // behaviour under test — the stub embeddings must agree with the deterministic rules.
+  const prototypes = fixture.cases.filter((item) => item.split === 'prototype');
+  const expectedTruePositive = prototypes.filter((item) => item.expectedEligible).length;
+  assert.deepEqual(report.confusionMatrix, {
+    truePositive: expectedTruePositive,
+    trueNegative: prototypes.length - expectedTruePositive,
+    falsePositive: 0,
+    falseNegative: 0,
+  });
   assert.deepEqual(report.unknownTitleRecovery, { total: 3, recovered: 3 });
-  assert.equal(report.evaluations.length, 8);
+  assert.equal(report.evaluations.length, prototypes.length);
   assert.equal(sha256(copiedDb), dbBefore, 'semantic shadow run leaves copied DB byte-identical');
   console.log('jh-semantic-shadow tests: PASS');
 } finally {
