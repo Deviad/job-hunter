@@ -4,16 +4,18 @@
  *
  * Example:
  *   node search-linkedin-jobs.mjs \
- *     --role "AI Architect" \
- *     --location "Switzerland" \
- *     --speaks "English,Italian" \
- *     --exclude-languages "German,French" \
- *     --industry "IT" \
- *     --db $PWD/jobhunter.sqlite
+ *     --role "<role>" \
+ *     --location "<country or city>" \
+ *     --speaks "<language>,<language>" \
+ *     --exclude-languages "<language>" \
+ *     --db $JOBHUNTER_HOME/jobhunter.sqlite
  *
- * The --db flag is optional; if omitted the script defaults to
- * path.join(process.cwd(), 'jobhunter.sqlite') — i.e. the directory
- * Pi Agent was launched from.
+ * --role and --speaks default to the profile under JOBHUNTER_HOME
+ * (personal-info-cache.json + profile-derived.json). Query expansion also
+ * reads the profile (adjacent/leadership roles, taxonomy). There are no
+ * built-in personal defaults: without a profile, only fully explicit runs
+ * (--role, --speaks and either --queries or --no-role-variants) start.
+ * The --db flag is optional; it defaults to $JOBHUNTER_HOME/jobhunter.sqlite.
  *
  * Raw LinkedIn HTML/page text stays inside this process. Output is only a summary.
  *
@@ -63,6 +65,9 @@ import {
   expandRoleQueries,
 } from '../../job-hunter/scripts/role-taxonomy.mjs';
 import * as _roleTaxonomyNs from '../../job-hunter/scripts/role-taxonomy.mjs';
+import { loadProfile, ProfileError } from '../../job-hunter/scripts/jh-profile.mjs';
+let activeTaxonomy = null;
+import { loadDataFile } from '../../job-hunter/scripts/jh-profile-extract.mjs';
 
 const SHARED_TAXONOMY_VERSION = _roleTaxonomyNs.ROLE_TAXONOMY_VERSION ?? null;
 
@@ -161,17 +166,18 @@ function noteSourceRestriction(state, reason) {
 function usage(exitCode = 0) {
   const out = exitCode === 0 ? process.stdout : process.stderr;
   out.write(`Usage:\n`);
-  out.write(`  search-linkedin-jobs.mjs --role <role> --location <location> --speaks <langs> [options]\n\n`);
+  out.write(`  search-linkedin-jobs.mjs --location <location> [--role <role>] [--speaks <langs>] [options]\n\n`);
   out.write(`Required:\n`);
-  out.write(`  --role <role>                 e.g. "AI Architect"\n`);
-  out.write(`  --location <location>         e.g. "Switzerland"\n`);
-  out.write(`  --speaks <langs>              comma-separated, e.g. "English,Italian"\n\n`);
+  out.write(`  --location <location>         country or city name as LinkedIn spells it\n\n`);
+  out.write(`Profile-backed (explicit flag wins; otherwise read from the profile under JOBHUNTER_HOME):\n`);
+  out.write(`  --role <role>                 default: first primary role of the profile\n`);
+  out.write(`  --speaks <langs>              comma-separated languages you speak; default: profile languages\n\n`);
   out.write(`Options:\n`);
-  out.write(`  --exclude-languages <langs>   comma-separated, e.g. "German,French"\n`);
-  out.write(`  --industry <industry>         e.g. "IT"; used to filter non-industry results\n`);
+  out.write(`  --exclude-languages <langs>   comma-separated required languages that always block\n`);
+  out.write(`  --industry <industry>         used to filter non-industry results (default inferred from the role)\n`);
   out.write(`  --similar-roles <roles>       comma-separated extra roles to search\n`);
-  out.write(`  --queries <queries>           comma-separated exact LinkedIn search queries\n`);
-  out.write(`  --no-role-variants            do not add obvious role aliases\n`);
+  out.write(`  --queries <queries>           comma-separated exact LinkedIn search queries (no expansion, no profile needed)\n`);
+  out.write(`  --no-role-variants            search only --role/--similar-roles (no expansion, no profile needed)\n`);
   out.write(`  --refresh-job-ids <ids>       comma-separated numeric LinkedIn job IDs to re-scrape (max 50)\n`);
   out.write(`  --fresh-days <n>              LinkedIn time filter in days, e.g. 7 for f_TPR=r604800\n`);
   out.write(`  --max-start <n>               LinkedIn pagination max offset (default 200)\n`);
@@ -255,14 +261,52 @@ function parseArgs(argv) {
     else if (a === '--help' || a === '-h') usage(0);
     else throw new Error(`Unknown argument: ${a}`);
   }
-  if (!o.role) throw new Error('--role is required');
   if (!o.location) throw new Error('--location is required');
-  if (!o.speaks?.length) throw new Error('--speaks is required');
+  o.role ||= null;
+  o.speaks = o.speaks?.length ? o.speaks : null;
   o.excludeLanguages ||= [];
   o.similarRoles ||= [];
-  o.industry ||= inferIndustry(o.role);
   if (!Number.isFinite(o.freshDays) || o.freshDays <= 0) o.freshDays = null;
   return o;
+}
+
+// Query expansion needs the profile (adjacent/leadership roles, taxonomy)
+// unless the caller supplied exact queries or disabled variants.
+function expansionNeedsProfile(o) {
+  return !o.queries?.length && o.roleVariants !== false;
+}
+
+function collectorNeedsProfile(o) {
+  return !o.role || !o.speaks?.length || expansionNeedsProfile(o);
+}
+
+// Explicit flags win; the profile fills the rest. Throws a ProfileError when
+// a needed value has no source — never a built-in personal default.
+function resolveCollectorDefaults(o, profile) {
+  const resolved = { ...o };
+  resolved.excludeLanguages = uniq([...(o.excludeLanguages || []), ...(profile?.excludeLanguages || [])]);
+  if (!resolved.role) {
+    resolved.role = profile?.roles?.primary?.[0] || null;
+    if (!resolved.role) throw new ProfileError('ROLES_MISSING', 'No --role given and the profile has no primary role (rolePreferences.preferredPrimaryRoles in personal-info-cache.json)');
+  }
+  if (!resolved.speaks?.length) {
+    resolved.speaks = profile?.speaks?.length ? [...profile.speaks] : null;
+    if (!resolved.speaks) throw new ProfileError('LANGUAGES_MISSING', 'Confirm languages and save them in personal-info-cache.json, or pass --speaks');
+  }
+  if (expansionNeedsProfile(resolved) && !profile) {
+    throw new ProfileError('PROFILE_MISSING', 'Query expansion needs the profile under JOBHUNTER_HOME; pass --queries or --no-role-variants to run without it');
+  }
+  resolved.industry ||= '';
+  return resolved;
+}
+
+function loadCollectorProfile({ required }) {
+  try {
+    return loadProfile({ home: JOBHUNTER_HOME, requireConfirmed: true });
+  } catch (error) {
+    if (!required && error instanceof ProfileError && error.code === 'PROFILE_MISSING') return null;
+    throw error;
+  }
 }
 
 function splitList(value) {
@@ -274,41 +318,43 @@ function parsePort(value, fallback) {
   return Number.isInteger(port) && port > 0 && port < 65536 ? port : fallback;
 }
 
-function inferIndustry(role) {
-  return /\b(ai|artificial intelligence|machine learning|ml|software|data|cloud|solution|enterprise|it|technology|architect|engineer)\b/i.test(role)
-    ? 'IT'
-    : '';
-}
 
 function uniq(values) {
   return [...new Set(values.filter(Boolean).map((v) => String(v).trim()).filter(Boolean))];
 }
 
-const SUPPLEMENTARY_QUERY_FAMILIES = [
-  { query: 'Applied AI Architect', family: 'applied-ai-architect' },
-  { query: 'Forward Deployed Architect', family: 'forward-deployed' },
-  { query: 'Forward Deployed Engineer', family: 'forward-deployed' },
-  { query: 'AI Field Engineer', family: 'solutions-field' },
-  { query: 'AI Customer Engineer', family: 'solutions-field' },
-];
-
 const MAX_TOTAL_QUERIES = 32;
+const EXPLICIT_REFRESH_QUERY = 'Explicit LinkedIn ID refresh';
 
-function getQueryFamily(query) {
-  const q = String(query || '').toLowerCase();
+const normalizeQuery = (value) => String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+
+/**
+ * Query-family provenance is profile-driven: 'primary' (equals or contains a
+ * primary role), 'adjacent', 'leadership', 'expansion' (taxonomy query
+ * expansions), 'user-supplied' (--role/--similar-roles/--queries), or
+ * 'explicit-refresh'. The context comes from queryFamilyContext().
+ */
+function queryFamilyContext(opts = {}, profile = null) {
+  const roles = profile?.roles || {};
+  const list = (values) => (Array.isArray(values) ? values : []).map(normalizeQuery).filter(Boolean);
+  return {
+    primary: list(roles.primary),
+    adjacent: list(roles.adjacent),
+    leadership: list(roles.leadership),
+    expansion: new Set(list(opts.expansionQueries)),
+    userSupplied: new Set(list([opts.role, ...(opts.similarRoles || []), ...(opts.queries || [])])),
+  };
+}
+
+function getQueryFamily(query, context = queryFamilyContext()) {
+  const q = normalizeQuery(query);
   if (!q) return 'user-supplied';
-  if (/explicit linkedin id refresh/.test(q)) return 'explicit-refresh';
-  if (/forward.?deployed/.test(q)) return 'forward-deployed';
-  if (/applied ai architect/.test(q)) return 'applied-ai-architect';
-  if (/principal|staff|applied ai engineer|ai technical lead|ai engineering lead/.test(q)) return 'principal-staff-lead';
-  if (/ai platform|ml platform|mlops|ai infrastructure/.test(q)) return 'platform-mlops';
-  if (/ai solutions?|ai integration|ai enablement|pre-sales/.test(q)) return 'solutions-field';
-  if (/engineering manager|head of ai|director of ai|solutions architecture manager|technical delivery/.test(q)) return 'leadership';
-  if (/ai security|ai governance|ai strategy/.test(q)) return 'security-governance';
-  if (/data.*ai|ai.*data/.test(q)) return 'data-ai';
-  if (/enterprise ai/.test(q)) return 'enterprise';
-  if (/genai|gen ai|generative ai|agentic|llm/.test(q)) return 'generative-ai';
-  if (/ai architect|ai\/ml architect/.test(q)) return 'core-architect';
+  if (q === normalizeQuery(EXPLICIT_REFRESH_QUERY)) return 'explicit-refresh';
+  if (context.primary.some((role) => q === role || q.includes(role))) return 'primary';
+  if (context.adjacent.some((role) => q === role || q.includes(role))) return 'adjacent';
+  if (context.leadership.some((role) => q === role || q.includes(role))) return 'leadership';
+  if (context.userSupplied.has(q)) return 'user-supplied';
+  if (context.expansion.has(q)) return 'expansion';
   return 'user-supplied';
 }
 
@@ -342,23 +388,44 @@ function mergeExplicitRefreshIds(queryResults, refreshJobIds) {
     pages: [...result.pages],
   }));
   if (refreshJobIds.length) {
-    results.unshift({ query: 'Explicit LinkedIn ID refresh', ids: [...refreshJobIds], pages: [], status: PAGE_STATE.HEALTHY });
+    results.unshift({ query: EXPLICIT_REFRESH_QUERY, ids: [...refreshJobIds], pages: [], status: PAGE_STATE.HEALTHY });
   }
   return results;
 }
 
-function buildQueries(opts) {
-  if (opts.queries?.length) return uniq(opts.queries);
-  if (!opts.roleVariants) return uniq([opts.role, ...opts.similarRoles]);
-  const taxonomyQueries = expandRoleQueries({
-    targetRole: opts.role,
-    similarRoles: opts.similarRoles,
+/**
+ * Build the query plan. Exact --queries or --no-role-variants need no profile;
+ * expansion needs it: the profile's primary/adjacent/leadership roles are
+ * always searched (the taxonomy may add expansions but never drops the
+ * user's own roles), then taxonomy expansions fill up to the hard cap.
+ */
+function buildQueryPlan(opts, profile = null) {
+  const similarRoles = opts.similarRoles || [];
+  if (opts.queries?.length) {
+    const queries = uniq(opts.queries);
+    return { queries, context: queryFamilyContext(opts, profile) };
+  }
+  if (opts.roleVariants === false) {
+    const queries = uniq([opts.role, ...similarRoles]);
+    return { queries, context: queryFamilyContext(opts, profile) };
+  }
+  if (!profile) throw new ProfileError('PROFILE_MISSING', 'Query expansion needs the profile under JOBHUNTER_HOME; pass --queries or --no-role-variants to run without it');
+  const roles = profile.roles || {};
+  const own = uniq([opts.role, ...similarRoles, ...(roles.primary || []), ...(roles.adjacent || []), ...(roles.leadership || [])]);
+  const expansionQueries = expandRoleQueries({
+    targetRole: opts.role || roles.primary?.[0],
+    similarRoles: own.filter((q) => q !== (opts.role || roles.primary?.[0])),
     maxQueries: MAX_TOTAL_QUERIES,
+    taxonomy: profile.taxonomy || null,
   });
-  const supplementary = SUPPLEMENTARY_QUERY_FAMILIES
-    .map((f) => f.query)
-    .filter((q) => !taxonomyQueries.some((tq) => tq.toLowerCase() === q.toLowerCase()));
-  return uniq([...taxonomyQueries, ...supplementary]).slice(0, MAX_TOTAL_QUERIES);
+  const queries = uniq(expansionQueries).slice(0, MAX_TOTAL_QUERIES);
+  const ownSet = new Set(own.map(normalizeQuery));
+  const context = queryFamilyContext({ ...opts, expansionQueries: expansionQueries.filter((q) => !ownSet.has(normalizeQuery(q))) }, profile);
+  return { queries, context };
+}
+
+function buildQueries(opts, profile = null) {
+  return buildQueryPlan(opts, profile).queries;
 }
 
 function shQuiet(cmd, args, options = {}) {
@@ -1077,10 +1144,11 @@ async function scrapeJobViaAuthenticatedCdp(client, id, secret, opts, queries) {
   }
 }
 
-function classifyLinkedInRole(job = {}, provisional = false) {
+function classifyLinkedInRole(job = {}, provisional = false, taxonomy = activeTaxonomy) {
   const descriptionText = [job.descriptionText, job.description]
     .find((value) => String(value ?? '').trim()) || '';
   const classification = classifySharedRole({
+    taxonomy,
     title: job.title,
     descriptionText,
     jobFunction: job.jobFunction,
@@ -1158,15 +1226,11 @@ function extractDescription(lines) {
   return descLines.join('\n').trim();
 }
 
-const LANGUAGE_MAP = {
-  English: ['English', 'Englisch', 'anglais', 'inglese'],
-  Italian: ['Italian', 'Italienisch', 'italien', 'italiano'],
-  German: ['German', 'Deutsch', 'Allemand', 'Tedesco', 'Deutschkenntnisse'],
-  French: ['French', 'Français', 'Francais', 'Französisch', 'Franzoesisch', 'francese'],
-  Spanish: ['Spanish', 'Spanisch', 'Espagnol', 'Spagnolo'],
-  Dutch: ['Dutch', 'Niederländisch', 'Nederlands'],
-  Portuguese: ['Portuguese', 'Portugiesisch', 'Portugais'],
-};
+// Language names/aliases come from the generic reference data; nothing here
+// implies any user speaks a language.
+const LANGUAGE_MAP = Object.fromEntries(Object.entries(loadDataFile('language-aliases.json').languages)
+  .map(([language, aliases]) => [language, uniq([language, ...(aliases || [])])]));
+const aliasPattern = (alias) => new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(alias)}(?![\\p{L}\\p{N}])`, 'iu');
 const NICE_CONTEXT = /\b(nice[- ]to[- ]have|plus|bonus|preferred|advantage|asset|optional|beneficial|would be a plus|good to have|desirable)\b/i;
 const REQUIRED_CONTEXT = /\b(required|must|mandatory|essential|fluent|proficient|excellent|strong|native|business fluent|c1|c2|kenntnisse|maîtrise|maitrise|obligatoire|nécessaire|necessaire|erforderlich|voraussetzung|zwingend)\b/i;
 
@@ -1179,7 +1243,7 @@ function parseLanguages(description) {
   const niceToHave = new Set();
   for (const sentence of sentenceSplit(description)) {
     for (const [lang, aliases] of Object.entries(LANGUAGE_MAP)) {
-      if (!aliases.some((a) => new RegExp(`\\b${escapeRe(a)}\\b`, 'i').test(sentence))) continue;
+      if (!aliases.some((a) => aliasPattern(a).test(sentence))) continue;
       if (NICE_CONTEXT.test(sentence)) niceToHave.add(lang);
       else if (REQUIRED_CONTEXT.test(sentence) || /language skills|sprachkenntnisse|langues?|languages?/i.test(sentence)) required.add(lang);
     }
@@ -1192,9 +1256,11 @@ function escapeRe(s) {
 }
 
 function passesLanguage(reqs, opts) {
-  const speaks = new Set(opts.speaks.map((l) => l.toLowerCase()));
-  const blocked = reqs.required.filter((l) => !speaks.has(l.toLowerCase()));
-  return { pass: blocked.length === 0, reason: blocked.length ? `requires ${blocked.join(', ')}` : null };
+  const speaks = new Set((opts.speaks || []).map((l) => l.toLowerCase()));
+  const excluded = new Set((opts.excludeLanguages || []).map((l) => l.toLowerCase()));
+  const blocked = reqs.required.filter((l) => excluded.has(l.toLowerCase()));
+  const unknown = reqs.required.filter((l) => !speaks.has(l.toLowerCase()) && !excluded.has(l.toLowerCase()));
+  return { pass: blocked.length === 0, reason: blocked.length ? `requires ${blocked.join(', ')}` : unknown.length ? `Confirm proficiency in ${unknown.join(', ')}` : null, unknown };
 }
 
 function parseJobPayload(id, url, payload, opts, queries) {
@@ -1240,12 +1306,13 @@ function parseJobPayload(id, url, payload, opts, queries) {
   };
 }
 
-function toDbRecord(r) {
+function toDbRecord(r, _index, taxonomy = activeTaxonomy) {
   const descriptionText = [r.descriptionText, r.description]
     .find((value) => String(value ?? '').trim()) || '';
   const role = classifyLinkedInRole(
     { ...r, descriptionText },
     !descriptionText.trim(),
+    taxonomy,
   );
   return {
     source: r.source,
@@ -1337,7 +1404,20 @@ async function main() {
   process.once('SIGINT', () => onCancel('SIGINT'));
   process.once('SIGTERM', () => onCancel('SIGTERM'));
 
-  const opts = parseArgs(process.argv.slice(2));
+  let opts = parseArgs(process.argv.slice(2));
+  // Profile resolution happens before any browser or CDP contact. Explicit
+  // --role/--speaks win; the profile fills the rest and feeds query expansion.
+  let profile = null;
+  try {
+    profile = loadCollectorProfile({ required: collectorNeedsProfile(opts) });
+    opts = resolveCollectorDefaults(opts, profile);
+    activeTaxonomy = profile?.taxonomy || { primaryTitles: [opts.role], adjacentTitles: opts.similarRoles || [] };
+  } catch (err) {
+    if (!(err instanceof ProfileError)) throw err;
+    console.error(`Search aborted before any navigation: ${err.code}: ${err.message}`);
+    process.exitCode = 1;
+    return;
+  }
   try {
     targetBase = resolveTargetBase();
   } catch (err) {
@@ -1400,7 +1480,9 @@ async function main() {
     console.log('  [source-owner] budget identity: linkedin-source (shared source-wide, port-independent)');
   }
 
-  const queries = buildQueries(opts);
+  const plan = buildQueryPlan(opts, profile);
+  const queries = plan.queries;
+  const familyOf = (query) => getQueryFamily(query, plan.context);
   console.log(`Searching LinkedIn via browser CDP: role="${opts.role}" location="${opts.location}" speaks="${opts.speaks.join(', ')}" port=${opts.obscuraPort} queries=${queries.length} detailMode=existing-cdp-text`);
 
   const secret = JSON.parse(readFileSync(opts.sessionJson, 'utf8'));
@@ -1608,14 +1690,15 @@ async function main() {
       similarRoles: opts.similarRoles,
       freshDays: opts.freshDays,
       queries,
-      queryFamilies: queries.map((q) => ({ query: q, family: getQueryFamily(q) })),
+      queryFamilies: queries.map((q) => ({ query: q, family: familyOf(q) })),
+      profile: profile ? { cvSha256: profile.provenance.cvSha256 || null, profileSha256: profile.provenance.profileSha256, status: profile.provenance.status } : null,
     },
     terminalStatuses: {
       searchQueries: queryStatuses,
       detailPages: { status: detailStatus, total: ids.length, scraped: scrapedRecords.length, failed: failedRecords.length, circuitBroken: detailCircuitBroken },
       sourcePause: sourcePause ?? undefined,
     },
-    queryStats: queryResults.map((q) => ({ query: q.query, family: getQueryFamily(q.query), uniqueIds: q.ids.length, pagesFetched: q.pages.length })),
+    queryStats: queryResults.map((q) => ({ query: q.query, family: familyOf(q.query), uniqueIds: q.ids.length, pagesFetched: q.pages.length })),
     totalUniqueJobIds: ids.length,
     scraped: records.length,
     roleMatches: roleMatches.length,
@@ -1682,7 +1765,8 @@ async function main() {
   }
 }
 
-function writeCancelledSummary(opts, queries) {
+function writeCancelledSummary(opts, queries, queryContext = queryFamilyContext()) {
+  const familyOf = (query) => getQueryFamily(query, queryContext);
   const summary = {
     generatedAt: new Date().toISOString(),
     parameters: {
@@ -1694,13 +1778,13 @@ function writeCancelledSummary(opts, queries) {
       similarRoles: opts.similarRoles,
       freshDays: opts.freshDays,
       queries,
-      queryFamilies: queries.map((q) => ({ query: q, family: getQueryFamily(q) })),
+      queryFamilies: queries.map((q) => ({ query: q, family: familyOf(q) })),
     },
     terminalStatuses: {
-      searchQueries: queries.map((q) => ({ query: q, family: getQueryFamily(q), status: 'cancelled', uniqueIds: 0, pagesFetched: 0 })),
+      searchQueries: queries.map((q) => ({ query: q, family: familyOf(q), status: 'cancelled', uniqueIds: 0, pagesFetched: 0 })),
       detailPages: { status: 'cancelled', total: 0, scraped: 0, failed: 0, circuitBroken: false },
     },
-    queryStats: queries.map((q) => ({ query: q, family: getQueryFamily(q), uniqueIds: 0, pagesFetched: 0 })),
+    queryStats: queries.map((q) => ({ query: q, family: familyOf(q), uniqueIds: 0, pagesFetched: 0 })),
     totalUniqueJobIds: 0,
     scraped: 0,
     roleMatches: 0,
@@ -1721,6 +1805,8 @@ function writeCancelledSummary(opts, queries) {
 }
 
 export {
+  passesLanguage,
+  buildQueryPlan,
   buildQueries,
   bypassRefreshIds,
   mergeExplicitRefreshIds,

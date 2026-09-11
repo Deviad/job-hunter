@@ -10,6 +10,10 @@ export const DB_PATH =
   process.env.JOBHUNTER_DB || path.join(JOBHUNTER_HOME, 'jobhunter.sqlite');
 export const CACHE_PATH = path.join(JOBHUNTER_HOME, 'personal-info-cache.json');
 export const CV_PATH = path.join(JOBHUNTER_HOME, 'CV.docx');
+// Machine-derived profile (skills, languages, titles extracted from CV.docx by
+// jh-profile-extract.mjs; refreshed when the CV hash changes). Private.
+export const PROFILE_DERIVED_PATH = path.join(JOBHUNTER_HOME, 'profile-derived.json');
+export const SEARCH_CONFIG_PATH = path.join(JOBHUNTER_HOME, 'search-config.json');
 export const BACKUPS_DIR = path.join(JOBHUNTER_HOME, 'backups');
 export const LOGS_DIR = path.join(JOBHUNTER_HOME, 'logs');
 

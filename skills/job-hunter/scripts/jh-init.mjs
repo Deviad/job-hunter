@@ -44,5 +44,14 @@ if (!existsSync(homeSchema)) {
 
 report.push(existsSync(CACHE_PATH) ? `cache present: ${CACHE_PATH}` : `TODO: add personal-info-cache.json to ${JOBHUNTER_HOME}`);
 report.push(existsSync(CV_PATH) ? `CV present: ${CV_PATH}` : `TODO: add CV.docx to ${JOBHUNTER_HOME}`);
+try {
+  const { profileStatus } = await import('./jh-profile.mjs');
+  const profile = profileStatus();
+  report.push(profile.state === 'current'
+    ? 'derived profile current (profile-derived.json matches CV.docx)'
+    : `TODO: derived profile ${profile.state} — ${profile.reason}; run jh-profile.mjs refresh (automatic on the next search/score run)`);
+} catch (error) {
+  report.push(`derived profile: could not evaluate (${error.message})`);
+}
 
 console.log(report.join('\n'));

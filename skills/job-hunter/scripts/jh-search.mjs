@@ -16,11 +16,13 @@
 //   5  preflight failed (doctor or CDP/domain check)
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { spawnSync as spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { JOBHUNTER_HOME, DB_PATH as DEFAULT_DB_PATH } from './jh-common.mjs';
 import { ROLE_TAXONOMY_VERSION } from './role-taxonomy.mjs';
 import { readLinkedInAccess, pauseLinkedInAccess } from './linkedin-access.mjs';
+import { loadProfile, resolveCountry, ProfileError } from './jh-profile.mjs';
 import { RESTRICTION_STATES } from '../../linkedin-job-search/scripts/linkedin-page-state.mjs';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -31,26 +33,13 @@ const LINKEDIN_SEARCH_SCRIPT = path.join(SKILLS_ROOT, 'linkedin-job-search', 'sc
 const INDEED_SEARCH_SCRIPT = path.join(SKILLS_ROOT, 'indeed-job-search', 'scripts', 'search-indeed-jobs.mjs');
 const RUNS_DIR = path.join(JOBHUNTER_HOME, 'runs');
 
-const INDEED_DOMAIN_BY_COUNTRY = new Map([
-  ['GB', 'https://uk.indeed.com'],
-  ['UK', 'https://uk.indeed.com'],
-  ['IE', 'https://ie.indeed.com'],
-  ['NL', 'https://nl.indeed.com'],
-  ['DK', 'https://dk.indeed.com'],
-  ['CH', 'https://ch.indeed.com'],
-  ['DE', 'https://de.indeed.com'],
-  ['US', 'https://www.indeed.com'],
-]);
-const LOCATION_BY_COUNTRY = new Map([
-  ['GB', 'United Kingdom'],
-  ['UK', 'United Kingdom'],
-  ['IE', 'Ireland'],
-  ['NL', 'Netherlands'],
-  ['DK', 'Denmark'],
-  ['CH', 'Switzerland'],
-  ['DE', 'Germany'],
-  ['US', 'United States'],
-]);
+// Country → display location / Indeed domain. The user's search-config.json
+// (under JOBHUNTER_HOME) overrides the generic reference data; nothing here is
+// specific to any maintainer.
+function resolveCountryDefaults(country) {
+  const resolved = resolveCountry(country, JOBHUNTER_HOME);
+  return { location: resolved.location, indeedDomain: resolved.indeedDomain, userConfigured: resolved.userConfigured };
+}
 
 const EXIT = { OK: 0, USAGE: 1, FATAL: 2, BUDGET: 3, BLOCKED: 4, PREFLIGHT: 5 };
 
@@ -64,8 +53,9 @@ Required:
   --country <code>              exactly one ISO country code per invocation
 
 Options:
-  --role <role>                 LinkedIn role query (default "AI Architect")
+  --role <role>                 LinkedIn role query (default: first primary role in the profile)
   --query <text>                Indeed query text (default same as --role)
+  --speaks <langs>              comma-separated languages you speak (default: profile languages)
   --location <text>             override the derived location string
   --domain <url>                override the derived Indeed domain
   --max-queries <n>             query-batch cap, default 3, hard cap 5
@@ -78,6 +68,11 @@ Options:
   --json                        machine-readable summary on stdout
   --help                        show this help
 
+Defaults not given on the command line come from the profile under JOBHUNTER_HOME
+(personal-info-cache.json + profile-derived.json extracted from CV.docx); country
+locations and Indeed domains come from search-config.json, falling back to the
+generic reference data. There are no built-in personal defaults.
+
 Exit codes: 0 ok, 1 usage, 2 fatal, 3 budget-exhausted (resumable), 4 blocked, 5 preflight-failed
 `);
   process.exit(code);
@@ -87,8 +82,9 @@ function parseArgs(argv) {
   const o = {
     source: null,
     country: null,
-    role: 'AI Architect',
+    role: null,
     query: null,
+    speaks: null,
     location: null,
     domain: null,
     maxQueries: 3,
@@ -110,6 +106,7 @@ function parseArgs(argv) {
     else if (a === '--source') o.source = next();
     else if (a === '--country') o.country = next().toUpperCase();
     else if (a === '--role') o.role = next();
+    else if (a === '--speaks') o.speaks = splitList(next());
     else if (a === '--query') o.query = next();
     else if (a === '--location') o.location = next();
     else if (a === '--domain') o.domain = next();
@@ -125,16 +122,70 @@ function parseArgs(argv) {
   }
   if (!o.source || !['linkedin', 'indeed'].includes(o.source)) usage(1);
   if (!o.country) usage(1);
-  if (!o.query) o.query = o.role;
-  if (!o.location) o.location = LOCATION_BY_COUNTRY.get(o.country) || o.country;
   if (o.source === 'indeed' && o.refreshJobIds.length) {
     throw new Error('--refresh-job-ids is supported only for LinkedIn');
   }
+  const country = resolveCountryDefaults(o.country);
+  if (!o.location) o.location = country.location;
   if (o.source === 'indeed' && !o.domain) {
-    o.domain = INDEED_DOMAIN_BY_COUNTRY.get(o.country);
-    if (!o.domain) throw new Error(`no known Indeed domain for country ${o.country}; pass --domain explicitly`);
+    o.domain = country.indeedDomain;
+    if (!o.domain) throw new Error(`no known Indeed domain for country ${o.country}; add it to ${path.join(JOBHUNTER_HOME, 'search-config.json')} (countries.${o.country}.indeedDomain) or pass --domain explicitly`);
   }
   return o;
+}
+
+function splitList(value) {
+  return String(value || '').split(/[;,]/).map((s) => s.trim()).filter(Boolean);
+}
+
+// Explicit flags always win; anything else comes from the profile. Returns
+// the filled options; throws when a needed value has no source.
+function resolveSearchDefaults(opts, profile) {
+  const o = { ...opts };
+  if (!o.role) {
+    o.role = profile?.roles?.primary?.[0] || null;
+    if (!o.role) throw new ProfileError('ROLES_MISSING', 'No --role given and the profile has no primary role (rolePreferences.preferredPrimaryRoles in personal-info-cache.json)');
+  }
+  if (!o.query) o.query = o.role;
+  if (!o.speaks?.length) o.speaks = profile?.speaks?.length ? [...profile.speaks] : [];
+  if (o.source === 'linkedin' && !o.speaks.length) {
+    throw new ProfileError('LANGUAGES_MISSING', 'Confirm languages and save them in personal-info-cache.json, or pass --speaks');
+  }
+  return o;
+}
+
+function needsProfile(opts) {
+  return !opts.role || !opts.query || (opts.source === 'linkedin' && !opts.speaks?.length);
+}
+
+// Lazy profile load: only when a default is needed, or to stamp the
+// checkpoint with the CV hash. A missing profile is fatal only when needed.
+function loadSearchProfile({ required }) {
+  try {
+    return loadProfile({ home: JOBHUNTER_HOME, requireConfirmed: true });
+  } catch (error) {
+    if (!required && error instanceof ProfileError && error.code === 'PROFILE_MISSING') return null;
+    throw error;
+  }
+}
+
+function profileStamp(profile) {
+  return profile ? { cvSha256: profile.provenance.cvSha256 || null, profileSha256: profile.provenance.profileSha256 || null, status: profile.provenance.status } : { cvSha256: null, profileSha256: null, status: 'unavailable' };
+}
+
+// A resumed run must not silently mix keyword sets from two different CVs.
+export function requestStamp(opts) {
+  const fields = ['source', 'country', 'role', 'query', 'location', 'domain', 'speaks', 'refreshJobIds', 'maxQueries'];
+  return createHash('sha256').update(JSON.stringify(fields.map((key) => [key, opts[key] ?? null]))).digest('hex');
+}
+
+function checkResumeProfile(checkpoint, profile, opts) {
+  if (opts && checkpoint.requestSha256 !== requestStamp(opts)) return 'checkpoint search options changed or are unstamped; start a fresh run';
+  const recorded = checkpoint?.profile?.profileSha256 ?? null;
+  const current = profileStamp(profile).profileSha256;
+  if (recorded && recorded === current) return null;
+  return `checkpoint ${checkpoint.runId} was recorded with profile hash ${recorded || 'none'} but the current profile hash is ${current || 'none'}; ` +
+    'the keyword set may differ. Start a fresh run instead of resuming.';
 }
 
 function parseRefreshJobIds(value) {
@@ -152,7 +203,7 @@ function buildLinkedInArgs(opts, outPath, summaryPath) {
     LINKEDIN_SEARCH_SCRIPT,
     '--role', opts.role,
     '--location', opts.location,
-    '--speaks', 'English',
+    ...(opts.speaks?.length ? ['--speaks', opts.speaks.join(',')] : []),
     '--db', opts.db,
     '--out', outPath,
     '--summary', summaryPath,
@@ -236,7 +287,7 @@ function classifySearchOutcome(opts, spawnResult, summary) {
 }
 
 async function main() {
-  const opts = parseArgs(process.argv.slice(2));
+  let opts = parseArgs(process.argv.slice(2));
   if (opts.source === 'linkedin') {
     const access = readLinkedInAccess(opts.db);
     if (!access.ok || !access.allowed) {
@@ -247,19 +298,42 @@ async function main() {
       process.exit(EXIT.BLOCKED);
     }
   }
+  // Profile: explicit flags win; missing values come from the profile. The
+  // loader logs to stderr when it rebuilds the derived profile from the CV.
+  let profile;
+  try {
+    profile = loadSearchProfile({ required: needsProfile(opts) });
+    opts = resolveSearchDefaults(opts, profile);
+  } catch (error) {
+    if (!(error instanceof ProfileError)) throw error;
+    console.error(`${error.code}: ${error.message}`);
+    process.exit(EXIT.USAGE);
+  }
+  if (profile?.provenance.refreshed) report(opts, `[profile] derived profile refreshed from ${path.basename(profile.provenance.cvPath)}`);
   const id = runId(opts);
-  mkdirSync(path.join(RUNS_DIR, id), { recursive: true });
-  const startedAt = Date.now();
-  const budgetMs = opts.budgetMinutes * 60 * 1000;
-
   let checkpoint = opts.resume ? loadCheckpoint(id) : null;
   if (opts.resume && !checkpoint) {
     console.error(`--resume ${opts.resume} given but no checkpoint found at ${checkpointPath(id)}`);
     process.exit(EXIT.USAGE);
   }
+  if (checkpoint) {
+    const mismatch = checkResumeProfile(checkpoint, profile, opts);
+    if (mismatch) {
+      console.error(`[refused] ${mismatch}`);
+      if (opts.json) console.log(JSON.stringify({ ok: false, runId: id, reason: mismatch }));
+      process.exit(EXIT.USAGE);
+    }
+  }
+  mkdirSync(path.join(RUNS_DIR, id), { recursive: true });
+  const startedAt = Date.now();
+  const budgetMs = opts.budgetMinutes * 60 * 1000;
+
   checkpoint ||= {
     runId: id, source: opts.source, country: opts.country, query: opts.query,
+    role: opts.role, speaks: opts.speaks,
     location: opts.location, domain: opts.domain || null,
+    profile: profileStamp(profile),
+    requestSha256: requestStamp(opts),
     refreshJobIds: opts.source === 'linkedin' ? opts.refreshJobIds : [],
     startedAt: new Date().toISOString(), status: 'started', queriesCompleted: 0,
     jobsSaved: 0, blockers: [], preflight: {},
@@ -383,8 +457,11 @@ export {
   buildLinkedInArgs,
   runId,
   classifySearchOutcome,
-  INDEED_DOMAIN_BY_COUNTRY,
-  LOCATION_BY_COUNTRY,
+  resolveCountryDefaults,
+  resolveSearchDefaults,
+  needsProfile,
+  checkResumeProfile,
+  profileStamp,
   EXIT,
 };
 

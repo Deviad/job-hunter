@@ -2,61 +2,13 @@
 // jh-status.mjs — pipeline dashboard over the canonical jobhunter.sqlite.
 // Usage: node jh-status.mjs [--json]
 import { openDb, DB_PATH } from './jh-common.mjs';
-import { ROLE_LABELS } from './role-taxonomy.mjs';
+import { ROLE_LABEL_SET, UNCLASSIFIED_ROLE_LABEL, canonicalRoleLabel, rawRoleLabel } from './role-labels.mjs';
+import { configuredFitThreshold } from './jh-profile.mjs';
+const fitThreshold = configuredFitThreshold();
 
 const asJson = process.argv.includes('--json');
 const db = await openDb();
-const ROLE_LABEL_SET = new Set(ROLE_LABELS);
-const UNCLASSIFIED_ROLE_LABEL = 'Unclassified';
-const ROLE_LABEL_ALIASES = new Map([
-  ['exact architecture', 'Exact architecture'],
-  ['adjacent technical', 'Adjacent technical'],
-  ['leadership progression', 'Leadership progression'],
-  ['leadership lateral', 'Leadership lateral'],
-  ['conditional', 'Conditional'],
-  ['data domain stretch', 'Data-domain stretch'],
-  ['out of scope', 'Out of scope'],
-  ['core architecture', 'Exact architecture'],
-  ['ai architecture', 'Exact architecture'],
-  ['ai architect', 'Exact architecture'],
-  ['ai architect agentic systems', 'Exact architecture'],
-  ['genai lead architect', 'Exact architecture'],
-  ['ai ml data architect', 'Data-domain stretch'],
-  ['data ai architect', 'Data-domain stretch'],
-  ['ai security architect', 'Exact architecture'],
-  ['ai software architect', 'Exact architecture'],
-  ['ai solution architect', 'Exact architecture'],
-  ['data architect', 'Out of scope'],
-  ['non it architecture', 'Out of scope'],
-  ['not matching ai architect scope', 'Out of scope'],
-  ['out scope', 'Out of scope'],
-  ['out-of-scope', 'Out of scope'],
-]);
 const NO_REASON = 'No role classification reason recorded.';
-
-function labelKey(value) {
-  return String(value ?? '')
-    .normalize('NFKD')
-    .replace(/\p{Diacritic}/gu, '')
-    .toLowerCase()
-    .replace(/&/g, ' and ')
-    .replace(/[_/]+/g, ' ')
-    .replace(/[–—-]+/g, ' ')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function rawRoleLabel(value) {
-  if (value == null) return '';
-  return String(value).trim();
-}
-
-function canonicalRoleLabel(value) {
-  const raw = rawRoleLabel(value);
-  if (ROLE_LABEL_SET.has(raw)) return raw;
-  return ROLE_LABEL_ALIASES.get(labelKey(raw)) || UNCLASSIFIED_ROLE_LABEL;
-}
 
 function boolValue(value) {
   if (typeof value === 'string') return /^(?:1|true|yes)$/i.test(value.trim());
@@ -181,11 +133,11 @@ out.applyQueue = (rows(`
          j.role_family_inferred, j.role_family_confidence, j.role_family_reason,
          CASE WHEN j.description_text IS NULL OR TRIM(j.description_text) = '' THEN 0 ELSE 1 END AS role_has_full_jd
   FROM match_results m JOIN jobs j ON j.source = m.source AND j.job_id = m.job_id
-  WHERE m.fit_score >= 60 AND m.cta = 'Apply'
+  WHERE m.fit_score >= ? AND m.cta = 'Apply'
     AND NOT EXISTS (SELECT 1 FROM application_runs a WHERE a.job_source = j.source AND a.job_id = j.job_id AND a.status IN ('submitted','success','completed'))
-  ORDER BY m.fit_score DESC`) || [])
+  ORDER BY m.fit_score DESC`, fitThreshold) || [])
   .map(withRoleReport)
-  .filter((row) => row.role_family_label !== 'Out of scope')
+  .filter((row) => !['Out of scope', 'Unclassified'].includes(row.role_family_label))
   .slice(0, 15);
 
 out.applications = rows(`SELECT status, COUNT(*) n FROM application_runs GROUP BY status ORDER BY n DESC`);
@@ -207,6 +159,6 @@ console.log(`\nScoring: ${out.scored} scored, ${out.unscored} unscored`);
 console.log(`Salary coverage: ${out.salaryCoverage ?? 'n/a'}`);
 console.log(`\nApplications by status:`);
 for (const r of out.applications || []) console.log(`  ${r.status ?? 'unknown'}: ${r.n}`);
-console.log(`\nApply queue (fit>=60, not yet applied; Out of scope excluded) — top ${out.applyQueue?.length ?? 0}:`);
+console.log(`\nApply queue (fit>=${fitThreshold}, not yet applied; reviewed roles only) — top ${out.applyQueue?.length ?? 0}:`);
 for (const r of out.applyQueue || []) console.log(`  [${r.fit_score}] ${roleLine(r)} — ${r.title} @ ${r.company} (${r.source}:${r.job_id})`);
 db.close();

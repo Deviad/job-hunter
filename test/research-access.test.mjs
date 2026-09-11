@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import * as access from '../skills/job-hunter/scripts/linkedin-access.mjs';
+import { loadProfile, confirmProfile } from '../skills/job-hunter/scripts/jh-profile.mjs';
 import { parseArgs, main } from '../skills/job-hunter/scripts/jh-linkedin-access.mjs';
 
 const dependencyHome = process.env.JOBHUNTER_HOME || path.join(process.env.HOME || homedir(), '.job-hunter');
@@ -322,6 +323,10 @@ async function cdpFixture(t) {
 function callerFixture(root, port) {
   const home = path.join(root, 'caller-home');
   mkdirSync(home);
+  writeFileSync(path.join(home, 'profile-derived.json'), JSON.stringify({ cvSha256: 'fixture-cv', skills: [], languages: [], titles: { values: [] } }));
+  writeFileSync(path.join(home, 'personal-info-cache.json'), JSON.stringify({ languages: { English: 'fluent' }, rolePreferences: { preferredPrimaryRoles: ['Fixture Analyst'], adjacentRoles: { acceptedRoles: [] }, excludedTitleFamilies: [], queryExclusionTerms: [] } }));
+  const profile = loadProfile({ home, log: () => {} });
+  confirmProfile({ home, expectedProfileSha256: profile.provenance.profileSha256, log: () => {} });
   writeFileSync(path.join(home, 'package.json'), '{}');
   symlinkSync(path.join(dependencyHome, 'node_modules'), path.join(home, 'node_modules'), 'dir');
   const log = path.join(root, 'children.jsonl');

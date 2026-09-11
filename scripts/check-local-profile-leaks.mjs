@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +20,21 @@ const GENERIC_VALUES = new Set([
   'yes', 'no', 'true', 'false', 'remote', 'hybrid', 'onsite', 'english',
   'united kingdom', 'switzerland', 'ireland', 'bachelor', 'master',
 ]);
+// Country and language names from the bundled generic reference tables are
+// public vocabulary, not private profile values, even when the maintainer's
+// cache happens to contain them.
+try {
+  const dataDir = join(fileURLToPath(new URL('..', import.meta.url)), 'skills', 'job-hunter', 'data');
+  const countries = JSON.parse(readFileSync(join(dataDir, 'indeed-domains.json'), 'utf8')).countries || {};
+  for (const entry of Object.values(countries)) if (entry?.location) GENERIC_VALUES.add(String(entry.location).toLowerCase());
+  const languages = JSON.parse(readFileSync(join(dataDir, 'language-aliases.json'), 'utf8')).languages || {};
+  for (const [name, aliases] of Object.entries(languages)) {
+    GENERIC_VALUES.add(name.toLowerCase());
+    for (const alias of aliases || []) GENERIC_VALUES.add(String(alias).toLowerCase());
+  }
+} catch {
+  // Reference tables absent (standalone export): keep the static list only.
+}
 
 function collectStrings(value, key = '', output = []) {
   if (Array.isArray(value)) {
@@ -47,6 +63,11 @@ function collectStrings(value, key = '', output = []) {
     output.push({ key, texts: [...variants] });
   }
   return output;
+}
+
+function wholeToken(text) {
+  const escaped = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'u');
 }
 
 function collectCvStrings(cvPath) {
@@ -140,7 +161,10 @@ export async function run(rootDir, jobHunterHome = process.env.JOBHUNTER_HOME ||
     }
     if (data.includes(0)) continue;
     const content = data.toString('utf8');
-    const matchedKeys = [...new Set(values.filter(({ texts }) => texts.some((text) => content.includes(text))).map(({ key }) => key))];
+    // Whole-token match: a private value must not be flagged because it is a
+    // substring of an unrelated longer word (a country inside a language
+    // name, a short surname inside a common word). Case stays significant.
+    const matchedKeys = [...new Set(values.filter(({ texts }) => texts.some((text) => wholeToken(text).test(content))).map(({ key }) => key))];
     if (matchedKeys.length > 0) findings.push({ path: rel, keys: matchedKeys });
   }
 

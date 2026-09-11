@@ -38,6 +38,7 @@ import {
 } from '../../job-hunter/scripts/role-taxonomy.mjs';
 
 const JOBHUNTER_HOME = process.env.JOBHUNTER_HOME || join(process.env.HOME || process.cwd(), '.job-hunter');
+import { loadProfile, ProfileError } from '../../job-hunter/scripts/jh-profile.mjs';
 const DEFAULT_DB = process.env.JOBHUNTER_DB || join(JOBHUNTER_HOME, 'jobhunter.sqlite');
 const DEFAULT_SOURCE = 'linkedin';
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -304,8 +305,9 @@ function normalizeLinks(job, fallbackUrl) {
   return fallbackUrl ? [fallbackUrl] : [];
 }
 
-function classifyNormalizedRole({ title, descriptionText, jobFunction, industries }) {
+function classifyNormalizedRole({ title, descriptionText, jobFunction, industries }, taxonomy = null) {
   const classification = classifyRole({
+    taxonomy,
     title,
     descriptionText,
     jobFunction,
@@ -315,7 +317,7 @@ function classifyNormalizedRole({ title, descriptionText, jobFunction, industrie
   return assertRoleClassification(classification);
 }
 
-function normalizeJob(job, index) {
+function normalizeJob(job, index, taxonomy = null) {
   const source = normalizeSource(job.source);
   const jobId = normalizeJobId(job);
   if (!jobId) {
@@ -343,7 +345,7 @@ function normalizeJob(job, index) {
   const title = firstNonBlank(job.title);
   const jobFunction = firstNonBlank(job.jobFunction, job.job_function);
   const industries = firstNonBlank(job.industries, job.industry);
-  const role = classifyNormalizedRole({ title, descriptionText, jobFunction, industries });
+  const role = classifyNormalizedRole({ title, descriptionText, jobFunction, industries }, taxonomy);
 
   return {
     row: {
@@ -434,7 +436,16 @@ async function main() {
     process.exit(1);
   }
 
-  const normalizedJobs = jobs.map(normalizeJob);
+  let taxonomy = null;
+  try {
+    const profile = loadProfile({ home: JOBHUNTER_HOME, refresh: 'never', requireConfirmed: true });
+    taxonomy = profile.taxonomy;
+  } catch (error) {
+    if (!(error instanceof ProfileError)) throw error;
+    // Ingestion is allowed without preferences, but must not invent a classification.
+    console.error(`[profile] ${error.code}; saving roles as Unclassified`);
+  }
+  const normalizedJobs = jobs.map((job, index) => normalizeJob(job, index, taxonomy));
 
   if (dbPath !== ':memory:') {
     const dbDir = dirname(dbPath);

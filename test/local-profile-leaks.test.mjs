@@ -124,6 +124,33 @@ describe('local profile leak gate', () => {
     assert.doesNotMatch(result.output.join('\n'), /Hidden Cv Identity/);
   });
 
+  it('treats bundled country and language names as generic, not private', async () => {
+    const { root, home } = await fixture();
+    await writeFile(join(home, 'personal-info-cache.json'), JSON.stringify({
+      profile: { fullName: 'Private Candidate Name' },
+      education: { country: 'Romania' },
+      languages: { Italian: 'native', Portuguese: 'b1' },
+      companySpecific: { Example: { countries: ['Netherlands'] } },
+    }));
+    await writeFile(join(root, 'skills', 'example', 'data.json'), JSON.stringify({ countries: ['Romania', 'Netherlands'], languages: ['Italian', 'Portuguese'] }));
+    const clean = await run(root, home);
+    assert.equal(clean.exitCode, 0, clean.output.join('\n'));
+    await writeFile(join(root, 'skills', 'example', 'leak.md'), 'Private Candidate Name');
+    const leak = await run(root, home);
+    assert.equal(leak.exitCode, 1);
+  });
+
+  it('does not flag a private value that is only a substring of a longer word', async () => {
+    const { root, home } = await fixture();
+    await writeFile(join(home, 'personal-info-cache.json'), JSON.stringify({ education: { country: 'Russia' } }));
+    await writeFile(join(root, 'skills', 'example', 'languages.json'), '{"Russian": ["russian"]}');
+    const clean = await run(root, home);
+    assert.equal(clean.exitCode, 0, clean.output.join('\n'));
+    await writeFile(join(root, 'skills', 'example', 'leak.md'), 'Studied in Russia.');
+    const leak = await run(root, home);
+    assert.equal(leak.exitCode, 1);
+  });
+
   it('passes synthetic publication content', async () => {
     const { root, home } = await fixture();
     await writeFile(join(root, 'skills', 'example', 'SKILL.md'), '# Skill\nExample Candidate');

@@ -20,6 +20,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+SCORER_DIR = SCRIPT_DIR.parents[1] / "job-match-scorer" / "scripts"
+if str(SCORER_DIR) not in sys.path:
+    sys.path.insert(0, str(SCORER_DIR))
+import jh_profile  # noqa: E402
+
 HOME = Path.home()
 WORKSPACE = Path(os.environ.get("JOBHUNTER_HOME", HOME / ".job-hunter")).expanduser().resolve()
 DB = Path(os.environ.get("JOBHUNTER_DB", WORKSPACE / "jobhunter.sqlite")).expanduser().resolve()
@@ -28,17 +34,11 @@ LINKEDIN_RUNNER = Path(os.environ.get("LINKEDIN_RUNNER", HOME / ".pi/agent/skill
 SCORER = Path(os.environ.get("SCORER", HOME / ".pi/agent/skills/job-match-scorer/scripts/score_jobs_inline.py"))
 VISUAL_RECOVER = Path(os.environ.get("VISUAL_RECOVER", HOME / ".pi/agent/skills/qwen-screenshot-debug/scripts/visual-recover.mjs"))
 
-DEFAULT_LOCATIONS = ["United Kingdom", "Ireland", "Denmark", "Netherlands"]
-DEFAULT_QUERIES = [
-    "AI Architect",
-    "AI Solution Architect",
-    "Enterprise AI Architect",
-    "Generative AI Architect",
-]
-LOCATIONS = list(DEFAULT_LOCATIONS)
-QUERIES = list(DEFAULT_QUERIES)
-SPEAKS = "English,Italian"
-EXCLUDE_LANGS = "German,French,Spanish"
+LOCATIONS: list[str] = []
+QUERIES: list[str] = []
+SPEAKS = ""
+EXCLUDE_LANGS = ""
+TARGET_ROLE = ""
 FRESH_DAYS = "7"
 MAX_START = "14"  # 0, 7, 14: bounded scan to avoid long hidden backoff loops.
 LOCATION_TIMEOUT_SECONDS = int(os.environ.get("LI_LOCATION_TIMEOUT_SECONDS", "2700"))
@@ -49,13 +49,33 @@ SERIOUS_BLOCK_RE = re.compile(
     r"login page|sign[ -]?in wall|please log in|please sign in)",
     re.IGNORECASE,
 )
-NOISY_TITLE_RE = re.compile(r"\b(student|working student|intern|internship|trainee|junior|graduate)\b", re.IGNORECASE)
-ASSISTANT_NOISY_RE = re.compile(r"\bassistant\b", re.IGNORECASE)
-ASSISTANT_SENIOR_EXEMPT_RE = re.compile(r"\b(assistant vice president|assistant director|assistant manager)\b", re.IGNORECASE)
+FIT_THRESHOLD = jh_profile.DEFAULT_FIT_THRESHOLD
 
 
 def log(msg: str = "") -> None:
     print(msg, flush=True)
+
+
+def load_profile_defaults() -> dict:
+    profile = jh_profile.load_profile(home=str(WORKSPACE), require_confirmed=True)
+    data_dir = SCRIPT_DIR.parents[1] / "job-hunter" / "data"
+    domains = json.loads((data_dir / "indeed-domains.json").read_text(encoding="utf-8"))
+    search_config_path = WORKSPACE / "search-config.json"
+    search_config = json.loads(search_config_path.read_text(encoding="utf-8")) if search_config_path.exists() else {"countries": {}}
+    locations = []
+    for code in profile.get("targetCountries", []):
+        country = (search_config.get("countries") or {}).get(code, {})
+        generic = (domains.get("countries") or {}).get(code, {})
+        locations.append(country.get("location") or generic.get("location") or code)
+    roles = profile.get("roles", {})
+    queries = list(dict.fromkeys((roles.get("primary") or []) + (roles.get("adjacent") or []) + (roles.get("leadership") or [])))
+    return {
+        "profile": profile,
+        "locations": locations,
+        "queries": queries[:16],
+        "speaks": ",".join(profile.get("speaks") or []),
+        "target_role": "; ".join((roles.get("primary") or queries)[:4]),
+    }
 
 
 def run_simple(cmd: list[str], *, cwd: Path = WORKSPACE, timeout: int = 120) -> tuple[int, str]:
@@ -191,12 +211,12 @@ def snapshot_counts(run_start_sql: str) -> dict:
             FROM jobs j
             JOIN match_results mr ON mr.source=j.source AND mr.job_id=j.job_id
             WHERE j.application_status='saved'
-              AND mr.fit_score >= 60
+              AND mr.fit_score >= ?
               AND mr.cta IN ('Apply','Maybe')
               AND COALESCE(mr.has_salary_blocker,0)=0
               AND datetime(j.created_at) > datetime('now','-14 days')
             GROUP BY j.source ORDER BY j.source
-            """
+            """, (FIT_THRESHOLD,)
         )]
         return out
 
@@ -223,23 +243,7 @@ def export_new_jobs_to_score(run_start_sql: str, path: Path) -> list[dict]:
 
 
 def postprocess_scores(scores: list[dict], jobs: list[dict]) -> list[dict]:
-    job_by_key = {(j.get("source"), j.get("job_id")): j for j in jobs}
-    for s in scores:
-        j = job_by_key.get((s.get("source"), s.get("job_id")), {})
-        title = j.get("title") or ""
-        is_noisy = bool(NOISY_TITLE_RE.search(title)) or (ASSISTANT_NOISY_RE.search(title) and not ASSISTANT_SENIOR_EXEMPT_RE.search(title))
-        if is_noisy:
-            blockers = json.loads(s.get("blockers_json") or "[]")
-            if "Noisy junior/student/assistant role" not in blockers:
-                blockers.append("Noisy junior/student/assistant role")
-            missing = json.loads(s.get("missing_or_unclear_must_haves_json") or "[]")
-            if "Role seniority/title is junior, student, intern, trainee, graduate, or assistant-level" not in missing:
-                missing.append("Role seniority/title is junior, student, intern, trainee, graduate, or assistant-level")
-            s["cta"] = "Skip"
-            s["stretch_label"] = "Blocked"
-            s["fit_score"] = min(float(s.get("fit_score") or 0), 40.0)
-            s["blockers_json"] = json.dumps(blockers)
-            s["missing_or_unclear_must_haves_json"] = json.dumps(missing)
+    # The shared scorer applies the user's exclusions and owns score arithmetic.
     return scores
 
 
@@ -312,7 +316,7 @@ def score_new_jobs(run_start_sql: str, search_id: str) -> dict:
         "SCORE_JOBS_PATH": str(jobs_path),
         "SCORE_OUTPUT_PATH": str(scores_path),
         "SCORE_SEARCH_ID": search_id,
-        "SCORE_TARGET_ROLE": "AI Architect; AI Solution Architect; Enterprise AI Architect; Generative AI Architect",
+        "SCORE_TARGET_ROLE": TARGET_ROLE,
         "SCORE_REQUIRE_TITLE": "0",
     })
     p = subprocess.run(["python3", str(SCORER)], cwd=str(WORKSPACE), env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -358,12 +362,12 @@ def split_list(value: str | None) -> list[str]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Visible LinkedIn search runner for job-hunter.")
     parser.add_argument("--run-dir", default=str(RUN_DIR), help="artifact directory (data only, no scripts)")
-    parser.add_argument("--locations", default=",".join(DEFAULT_LOCATIONS), help="comma/semicolon-separated locations")
-    parser.add_argument("--queries", default=",".join(DEFAULT_QUERIES), help="comma/semicolon-separated LinkedIn search queries")
+    parser.add_argument("--locations", default=None, help="comma/semicolon-separated locations (default: profile target countries)")
+    parser.add_argument("--queries", default=None, help="comma/semicolon-separated LinkedIn search queries (default: profile roles)")
     parser.add_argument("--fresh-days", default=FRESH_DAYS)
     parser.add_argument("--max-start", default=MAX_START)
-    parser.add_argument("--speaks", default=SPEAKS)
-    parser.add_argument("--exclude-languages", default=EXCLUDE_LANGS)
+    parser.add_argument("--speaks", default=None)
+    parser.add_argument("--exclude-languages", default="")
     parser.add_argument("--location-timeout-seconds", type=int, default=LOCATION_TIMEOUT_SECONDS)
     parser.add_argument("--score-fallback", action="store_true", help="only score jobs using --run-start-sql or fallback_start_sql.txt")
     parser.add_argument("--run-start-sql", default=None, help="SQLite timestamp for --score-fallback")
@@ -371,14 +375,30 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    global RUN_DIR, LOCATIONS, QUERIES, FRESH_DAYS, MAX_START, SPEAKS, EXCLUDE_LANGS, LOCATION_TIMEOUT_SECONDS
+    global RUN_DIR, LOCATIONS, QUERIES, FRESH_DAYS, MAX_START, SPEAKS, EXCLUDE_LANGS, LOCATION_TIMEOUT_SECONDS, TARGET_ROLE, FIT_THRESHOLD
+    try:
+        defaults = load_profile_defaults()
+    except jh_profile.ProfileError as exc:
+        log(f"[fatal] {exc.code}: {exc}")
+        return 2
     RUN_DIR = Path(args.run_dir).expanduser().resolve()
-    LOCATIONS = split_list(args.locations) or list(DEFAULT_LOCATIONS)
-    QUERIES = split_list(args.queries) or list(DEFAULT_QUERIES)
+    LOCATIONS = split_list(args.locations) or defaults["locations"]
+    QUERIES = split_list(args.queries) or defaults["queries"]
     FRESH_DAYS = str(args.fresh_days)
     MAX_START = str(args.max_start)
-    SPEAKS = args.speaks
+    SPEAKS = args.speaks or defaults["speaks"]
     EXCLUDE_LANGS = args.exclude_languages
+    TARGET_ROLE = defaults["target_role"]
+    FIT_THRESHOLD = defaults['profile']['fitThreshold']
+    if not LOCATIONS:
+        log("[fatal] no --locations supplied and search-config.json has no target countries")
+        return 2
+    if not QUERIES:
+        log("[fatal] no --queries supplied and the profile has no roles")
+        return 2
+    if not SPEAKS:
+        log("[fatal] no --speaks supplied and the profile has no usable languages")
+        return 2
     LOCATION_TIMEOUT_SECONDS = int(args.location_timeout_seconds)
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     os.chdir(WORKSPACE)
@@ -434,11 +454,9 @@ def main() -> int:
         summary = RUN_DIR / f"linkedin-summary-{loc.lower().replace(' ', '-')}.json"
         cmd = [
             "node", str(LINKEDIN_RUNNER),
-            "--role", "AI Architect",
+            "--role", TARGET_ROLE.split(";")[0].strip() or QUERIES[0],
             "--location", loc,
             "--speaks", SPEAKS,
-            "--exclude-languages", EXCLUDE_LANGS,
-            "--industry", "IT/software/AI",
             "--queries", ",".join(QUERIES),
             "--fresh-days", FRESH_DAYS,
             "--max-start", MAX_START,
@@ -449,6 +467,8 @@ def main() -> int:
             "--out", str(out),
             "--summary", str(summary),
         ]
+        if EXCLUDE_LANGS:
+            cmd[cmd.index("--queries"):cmd.index("--queries")] = ["--exclude-languages", EXCLUDE_LANGS]
         searches.append((loc, cmd))
 
     search_results: list[dict] = []

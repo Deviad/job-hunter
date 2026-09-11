@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "description": "Generic title-exclusion families. A family applies when the user's rolePreferences.excludedTitleFamilies names it, or automatically when any user role contains one of its appliesWhenRoleContains words. A title matching titleTerms is excluded unless it also contains an exemptTerm. Entries in excludedTitleFamilies that are not family keys are treated as literal title phrases to exclude.",
+  "families": {
+    "building-architecture": {
+      "summary": "Construction, interior and landscape architecture roles that share the word 'architect' with software architecture.",
+      "appliesWhenRoleContains": ["architect"],
+      "titleTerms": [
+        "architekt", "architektin", "architecte", "architetto", "arquitecto", "arquitecta", "architect (bim)",
+        "bim", "riba", "part ii", "part 2", "part iii", "revit", "autocad",
+        "construction architect", "building architect", "innenarchitekt", "innenarchitektin",
+        "interior architect", "landscape architect", "architecte d'intérieur", "architecte d.int.rieur",
+        "architetto d'interni", "architetto d.interni", "draftsman", "draughtsman", "zeichner", "zeichnerin",
+        "bauleiter", "bauleiterin", "projektleiter", "projektleiterin", "praktikant", "praktikantin",
+        "construction manager", "site manager", "quantity surveyor"
+      ],
+      "exemptTerms": [
+        "ai", "a.i.", "artificial intelligence", "genai", "generative ai", "llm", "machine learning", "ml",
+        "software", "solution", "solutions", "enterprise", "cloud", "data", "platform", "security",
+        "integration", "technical", "system", "systems", "network", "infrastructure", "application", "it "
+      ]
+    },
+    "early-career": {
+      "summary": "Student, intern and graduate roles.",
+      "appliesWhenRoleContains": [],
+      "titleTerms": ["student", "working student", "werkstudent", "intern", "internship", "trainee", "apprentice", "graduate", "junior", "stagiaire", "praktikum"],
+      "exemptTerms": ["assistant vice president", "assistant director", "assistant manager"]
+    },
+    "sales": {
+      "summary": "Quota-led commercial roles.",
+      "appliesWhenRoleContains": [],
+      "titleTerms": ["account executive", "sales executive", "sales director", "business development representative", "sales manager", "commercial director", "sales representative"],
+      "exemptTerms": ["engineer", "architect"]
+    },
+    "product-management": {
+      "summary": "Product, program and project management roles.",
+      "appliesWhenRoleContains": [],
+      "titleTerms": ["product manager", "program manager", "programme manager", "project manager"],
+      "exemptTerms": ["technical product manager", "engineering manager"]
+    },
+    "data-specialist": {
+      "summary": "Data-specialist titles that overlap with software roles.",
+      "appliesWhenRoleContains": [],
+      "titleTerms": ["data architect", "data warehouse architect", "data platform architect", "data lakehouse architect", "data scientist", "research scientist"],
+      "exemptTerms": ["data & ai", "data and ai", "ai & data", "ai and data"]
+    }
+  }
+}

@@ -75,6 +75,25 @@ existsSync(DB_PATH) ? ok('db', DB_PATH) : fail('db', `${DB_PATH} missing — run
 existsSync(CACHE_PATH) ? ok('personal-info-cache') : fail('personal-info-cache', `${CACHE_PATH} missing`);
 existsSync(CV_PATH) ? ok('CV.docx') : warn('CV.docx', `${CV_PATH} missing — uploads will fail`);
 
+// Derived profile (skills/languages/titles extracted from the CV): stale means
+// the CV changed since extraction; it is rebuilt automatically by the next
+// search/score run, or now with `jh-profile.mjs refresh`.
+try {
+  // Loaded lazily so a partial installation still gets the other checks.
+  const { profileStatus, loadProfile } = await import('./jh-profile.mjs');
+  const profile = profileStatus();
+  if (profile.state === 'current') ok('derived profile', 'current for CV.docx');
+  else if (profile.state === 'stale') warn('derived profile', `stale — ${profile.reason}; run jh-profile.mjs refresh`);
+  else warn('derived profile', `${profile.state} — ${profile.reason}; run jh-profile-extract.mjs`);
+  if (profile.derived) {
+    const { confirmation } = loadProfile({ refresh: 'never', allowIncomplete: true });
+    if (confirmation.state === 'confirmed') ok('profile preferences', 'confirmed');
+    else warn('profile preferences', `${confirmation.state}; run jh-profile.mjs review and confirm answers with the user`);
+  }
+} catch (error) {
+  warn('derived profile', `could not evaluate (${error.message})`);
+}
+
 // Stale run-dir scripts: first drafts belong in runs/, confirmed scripts belong in skills.
 const staleRunScripts = findRunScriptsOlderThan(JOBHUNTER_HOME, 7);
 if (staleRunScripts.length) {

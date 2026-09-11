@@ -35,6 +35,21 @@ node ~/.pi/agent/skills/job-hunter/scripts/jh-init.mjs
 
 Before applying, populate `~/.job-hunter/CV.docx` and the `profile.firstName`, `profile.lastName`, `profile.email`, and `profile.phone` fields in `~/.job-hunter/personal-info-cache.json`. Application helpers fail closed when required identity fields are absent; the repository contains no maintainer identity defaults.
 
+### Profile
+
+Search, filtering and scoring read the user's roles, languages and skills from one profile loader instead of built-in defaults. Two layers feed it:
+
+- `~/.job-hunter/personal-info-cache.json` holds confirmed preferences: target titles, accepted adjacent roles, excluded families and literal `rolePreferences.queryExclusionTerms`, plus `languages` (language-to-proficiency map) and optional skills. After analyzing the CV, the model asks follow-up questions and saves the user's answers here. Missing languages remain unknown; `none` records an explicit negative answer. No sector's roles are excluded by default from query expansion.
+- `~/.job-hunter/profile-derived.json` holds skills, certifications, language suggestions and title lines extracted from `CV.docx`. Its CV hash triggers automatic re-extraction after an upload. Confirmed language and role preferences survive refresh; changed evidence prompts follow-up questions rather than replacing user answers.
+
+```bash
+node ~/.pi/agent/skills/job-hunter/scripts/jh-profile.mjs status    # current | stale | missing | no-cv
+node ~/.pi/agent/skills/job-hunter/scripts/jh-profile.mjs show      # merged profile (no personal defaults)
+node ~/.pi/agent/skills/job-hunter/scripts/jh-profile.mjs refresh   # force re-extraction now
+```
+
+Country and Indeed-domain defaults come from `~/.job-hunter/search-config.json` (its `countries` keys are the target countries) over the generic table in `skills/job-hunter/data/indeed-domains.json`. Every script accepts explicit flags that override the profile; none falls back to a built-in personal value.
+
 ### Doctor
 
 Run the doctor before each search or application session. It distinguishes required failures from optional degraded capabilities.

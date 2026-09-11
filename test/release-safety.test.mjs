@@ -52,6 +52,27 @@ describe('check-release-safety', () => {
     assert.ok(r.findings.some(f => f.type === 'forbidden-file'));
   });
 
+  it('ignores a worktree .git pointer file like the .git directory', async () => {
+    const dir = fresh();
+    await mkdir(join(dir, 'skills', 'docx'), { recursive: true });
+    await writeFile(join(dir, 'skills', 'docx', 'SKILL.md'), '# docx\nDocx skill.');
+    await writeFile(join(dir, 'README.md'), '# Job Hunter');
+    await mkdir(join(dir, 'docs'), { recursive: true });
+    await writeFile(join(dir, 'docs', 'prerequisites.md'), '# Prerequisites');
+    await writeFile(join(dir, '.git'), 'gitdir: /Users/someone/projects/repo/.git/worktrees/branch\n');
+    const r = await run(dir);
+    assert.equal(r.exitCode, 0, JSON.stringify(r.findings));
+  });
+
+  it('fails on a forbidden filename (profile-derived.json)', async () => {
+    const dir = fresh();
+    await mkdir(join(dir, 'skills', 'x'), { recursive: true });
+    await writeFile(join(dir, 'skills', 'x', 'profile-derived.json'), '{"cvSha256":"x"}');
+    const r = await run(dir);
+    assert.equal(r.exitCode, 1);
+    assert.ok(r.findings.some(f => f.type === 'forbidden-file' && f.path.includes('profile-derived.json')));
+  });
+
   it('fails on a forbidden filename (personal-info-cache.json)', async () => {
     const dir = fresh();
     await mkdir(join(dir, 'skills', 'x'), { recursive: true });

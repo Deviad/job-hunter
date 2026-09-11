@@ -701,7 +701,7 @@ function runScript(name, code, args = [], env = {}, timeoutMs = 25000) {
 
 function runCli(name, args, env = {}, timeoutMs = 25000) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [path.join(__dirname, 'search-linkedin-jobs.mjs'), ...args], {
+    const child = spawn(process.execPath, [path.join(__dirname, 'search-linkedin-jobs.mjs'), '--no-role-variants', ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, ...env },
     });

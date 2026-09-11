@@ -9,9 +9,9 @@ import {
   JOBHUNTER_HOME, DB_PATH as DEFAULT_DB_PATH, LOGS_DIR,
 } from './jh-common.mjs';
 import { assertRoleClassification, classifyRole } from './role-taxonomy.mjs';
+import { loadProfile, ProfileError, resolveCountry } from './jh-profile.mjs';
+let activeTaxonomy = null;
 
-const DEFAULT_LOCATIONS = ['United Kingdom', 'Ireland', 'Denmark', 'Netherlands'];
-const DEFAULT_QUERIES = ['AI Architect', 'AI Solution Architect', 'Enterprise AI Architect', 'Generative AI Architect'];
 const COUNTRY_BY_LOCATION = new Map([
   ['United Kingdom', 'GB'], ['UK', 'GB'], ['Great Britain', 'GB'],
   ['Ireland', 'IE'], ['Denmark', 'DK'], ['Netherlands', 'NL'], ['The Netherlands', 'NL'],
@@ -26,10 +26,10 @@ const EXCLUDED_HOST_RE = /(^|\.)(linkedin\.com|indeed\.|glassdoor\.|monster\.|zi
 function usage(exitCode = 0) {
   const out = exitCode === 0 ? process.stdout : process.stderr;
   out.write(`Usage:\n`);
-  out.write(`  jh-discover.mjs [--locations UK,Ireland] [--queries "AI Architect,AI Lead"] [options]\n\n`);
+  out.write(`  jh-discover.mjs [--locations UK,Ireland] [--queries "Platform Architect,Cloud Lead"] [options]\n\n`);
   out.write(`Options:\n`);
-  out.write(`  --locations <list>       comma/semicolon-separated locations (default: UK, IE, DK, NL)\n`);
-  out.write(`  --queries <list>         comma/semicolon-separated role queries\n`);
+  out.write(`  --locations <list>       comma/semicolon-separated locations (default: profile target countries)\n`);
+  out.write(`  --queries <list>         comma/semicolon-separated role queries (default: profile roles)\n`);
   out.write(`  --time-range <value>     SearXNG time_range, default week\n`);
   out.write(`  --searxng-url <url>      default http://localhost:8888\n`);
   out.write(`  --limit-per-query <n>    SearXNG results inspected per query, default 12\n`);
@@ -55,8 +55,8 @@ function splitList(value) {
 function parseArgs(argv) {
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-');
   const opts = {
-    locations: DEFAULT_LOCATIONS,
-    queries: DEFAULT_QUERIES,
+    locations: null,
+    queries: null,
     timeRange: 'week',
     searxngUrl: process.env.SEARXNG_URL || 'http://localhost:8888',
     limitPerQuery: 12,
@@ -91,9 +91,20 @@ function parseArgs(argv) {
     else if (a === '--json') opts.json = true;
     else throw new Error(`unknown argument: ${a}`);
   }
-  if (!opts.locations.length) throw new Error('--locations resolved to an empty list');
-  if (!opts.queries.length && !opts.backfillOnly) throw new Error('--queries resolved to an empty list');
   return opts;
+}
+
+function resolveDiscoverDefaults(opts, profile) {
+  const resolved = { ...opts };
+  if (!resolved.locations?.length) {
+    resolved.locations = profile.targetCountries.map((code) => resolveCountry(code, JOBHUNTER_HOME).location);
+  }
+  if (!resolved.queries?.length) {
+    resolved.queries = profile.roles.all.slice(0, 16);
+  }
+  if (!resolved.locations.length) throw new ProfileError('LOCATIONS_MISSING', 'No --locations given and search-config.json has no target countries');
+  if (!resolved.queries.length && !resolved.backfillOnly) throw new ProfileError('ROLES_MISSING', 'No --queries given and the profile has no roles');
+  return resolved;
 }
 
 function requireFromWorkspace(id) {
@@ -124,8 +135,9 @@ function countryCodeFor(location) {
   return null;
 }
 
-function classifyListing({ title = '', descriptionText = '', provisional = true, jobFunction = '', industries = '' } = {}) {
+function classifyListing({ title = '', descriptionText = '', provisional = true, jobFunction = '', industries = '', taxonomy = activeTaxonomy } = {}) {
   return assertRoleClassification(classifyRole({
+    taxonomy,
     title,
     descriptionText,
     jobFunction,
@@ -180,13 +192,14 @@ async function searxngSearch(opts, query, location) {
   return (data.results || []).slice(0, opts.limitPerQuery);
 }
 
-function rowFromResult(result, query, location) {
+function rowFromResult(result, query, location, taxonomy = activeTaxonomy) {
   const url = result.url || '';
   const parsed = safeUrl(url);
   if (!parsed || EXCLUDED_HOST_RE.test(parsed.hostname)) return null;
   const title = String(result.title || '').trim();
   const content = String(result.content || '').trim();
   const classification = classifyListing({
+    taxonomy,
     title,
     descriptionText: content,
     provisional: true,
@@ -449,6 +462,7 @@ async function backfillRows(db, opts, candidates) {
         throw new Error(`description too short (${extracted.description_text.length} chars)`);
       }
       const classification = classifyListing({
+        taxonomy: opts.taxonomy || activeTaxonomy,
         title: extracted.title,
         descriptionText: extracted.description_text,
         provisional: false,
@@ -480,7 +494,17 @@ async function backfillRows(db, opts, candidates) {
 }
 
 async function main() {
-  const opts = parseArgs(process.argv.slice(2));
+  let opts = parseArgs(process.argv.slice(2));
+  try {
+    const profile = loadProfile({ home: JOBHUNTER_HOME, requireConfirmed: true });
+    activeTaxonomy = profile.taxonomy;
+    opts = resolveDiscoverDefaults(opts, profile);
+    if (profile.provenance.refreshed && !opts.json) console.error(`[profile] derived profile refreshed from ${path.basename(profile.provenance.cvPath)}`);
+  } catch (error) {
+    if (!(error instanceof ProfileError)) throw error;
+    console.error(`${error.code}: ${error.message}`);
+    process.exit(2);
+  }
   mkdirSync(path.dirname(opts.out), { recursive: true });
   const db = opts.dryRun && !existsSync(opts.db) ? null : openDb(opts.db);
   const seen = new Set();

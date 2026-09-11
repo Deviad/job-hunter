@@ -1,13 +1,48 @@
 {
-  "fullName": "Jane Doe",
-  "email": "jane.doe@example.com",
-  "phone": "+44 7700 000000",
-  "location": "London, United Kingdom",
-  "workAuthorization": "Right to work in UK",
-  "noticePeriod": "4 weeks",
-  "currentSalary": 0,
-  "desiredSalary": 0,
-  "demographics": {
-    "gender": "Prefer not to say"
+  "schemaVersion": 2,
+  "lastUpdated": null,
+  "purpose": "Synthetic example only. Reserved domain and visibly fake person.",
+  "profile": {
+    "firstName": "Jane",
+    "lastName": "Doe",
+    "email": "jane.doe@example.com",
+    "phone": "+44 7700 000000",
+    "website": "",
+    "linkedinUrl": "",
+    "githubUrl": "",
+    "address": {
+      "city": "London",
+      "country": "United Kingdom"
+    }
+  },
+  "workHistory": [],
+  "education": [],
+  "applicationPreferences": {
+    "noticePeriod": "4 weeks",
+    "fitScoreThreshold": 60
+  },
+  "workAuthorization": {
+    "United Kingdom": "yes"
+  },
+  "companySpecific": {},
+  "portalCredentials": {},
+  "notes": "",
+  "languages": {
+    "English": "native"
+  },
+  "skills": [],
+  "rolePreferences": {
+    "preferredPrimaryRoles": [
+      "Platform Engineer"
+    ],
+    "adjacentRoles": {
+      "acceptedRoles": [],
+      "adjacentTechnicalLeadership": [],
+      "leadershipProgression": []
+    },
+    "excludedTitleFamilies": [
+      "early-career"
+    ],
+    "taxonomy": null
   }
 }

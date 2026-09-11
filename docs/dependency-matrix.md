@@ -6,10 +6,10 @@ This matrix covers every bundled skill and classifies code dependencies, executa
 
 | Skill | Class | Node packages | Python dependencies | Direct skill dependencies |
 |---|---|---|---|---|
-| `job-hunter` | Core | `better-sqlite3`, `ws` | None | LinkedIn, Indeed, scorer, salary, auto-apply |
+| `job-hunter` | Core | `better-sqlite3`, `ws` | Standard-library ZIP/XML profile extraction | LinkedIn, Indeed, scorer, salary, auto-apply |
 | `linkedin-job-search` | Core | `ws`, workspace `better-sqlite3`, sibling `job-hunter` skill (persisted LinkedIn access state) | None | CAPTCHA and browser repair paths |
 | `indeed-job-search` | Core | `ws`, workspace `better-sqlite3` | None | LinkedIn SQLite saver, CAPTCHA and browser repair paths |
-| `job-match-scorer` | Core | workspace `better-sqlite3` | Standard-library scorer | DOCX input contract, salary handoff |
+| `job-match-scorer` | Core | workspace `better-sqlite3`, Node profile loader | Standard-library scorer | `job-hunter` profile loader and DOCX reader, salary handoff |
 | `salary-calculator` | Core | `better-sqlite3` | None | Browser session bridge for posted-salary evidence |
 | `auto-job-application` | Core | `better-sqlite3`, `ws` | Standard-library helpers | CAPTCHA, Qwen recovery, Selenium visual recovery, DOCX/PDF |
 | `captcha-resolution` | Required support | `ws` | `Pillow` through its helper environment | Qwen recovery when visual interpretation is needed |
@@ -29,7 +29,7 @@ The root `package.json` and `package-lock.json` pin the shared Node packages. DO
 |---|---|---|
 | Node.js 22 or newer and npm | Required | All JavaScript skills and bootstrap |
 | `sqlite3` | Required | Workspace diagnostics and database operations |
-| `python3` | Conditional | Scoring and ATS/document helpers |
+| `python3` | Required for profile workflows | CV profile extraction, scoring and ATS/document helpers |
 | `uv` | Conditional | DOCX and PDF helpers |
 | Docker with Compose | Conditional | Selenium Chromium and SearXNG services |
 | `ffmpeg` and `xdotool` | Conditional, inside recovery environment | Selenium visual click recovery |
@@ -61,6 +61,9 @@ The root `package.json` and `package-lock.json` pin the shared Node packages. DO
 - `jobhunter.sqlite`
 - `CV.docx`
 - `personal-info-cache.json`
+- `profile-derived.json` (regenerated CV evidence)
+- `profile-confirmation.json` (confirmation tied to the effective profile hash)
+- `search-config.json` (user-selected countries and search settings)
 - `node_modules/better-sqlite3`
 - `node_modules/ws`
 - generated logs, backups, and run artifacts

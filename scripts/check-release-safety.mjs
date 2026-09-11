@@ -16,6 +16,8 @@ const FORBIDDEN_FILENAME = [
   /^CV\.(docx|pdf|txt|md)$/i,
   /^resume\./i,
   /^personal-info-cache\.json$/i,
+  /^profile-derived\.json$/i,
+  /^profile-confirmation\.json$/i,
   /\.(?:sqlite|sqlite3|db)(?:-wal|-shm)?$/i,
   /^\.env(?:\.|$)/i,
   /\.pem$/i,
@@ -80,6 +82,10 @@ export async function run(rootDir) {
     for (const entry of entries) {
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
       const full = join(dir, entry.name);
+
+      // Git metadata is never release content whether it is the .git
+      // directory of a checkout or the .git pointer file of a worktree.
+      if (!prefix && entry.name === '.git') continue;
 
       if (entry.isDirectory()) {
         if (IGNORED_DIRECTORIES.has(entry.name)) continue;

@@ -1,0 +1,2083 @@
+{
+ "schemaVersion": 1,
+ "description": "Generic technology, practice and certification vocabulary. Used to recognize requirement terms in job descriptions and to extract possession evidence from a CV. Membership never implies that any user holds a skill.",
+ "terms": [
+  {
+   "term": "aws",
+   "aliases": [
+    "amazon web services"
+   ],
+   "kind": "cloud"
+  },
+  {
+   "term": "azure",
+   "aliases": [
+    "microsoft azure",
+    "azure cloud"
+   ],
+   "kind": "cloud"
+  },
+  {
+   "term": "gcp",
+   "aliases": [
+    "google cloud",
+    "google cloud platform"
+   ],
+   "kind": "cloud"
+  },
+  {
+   "term": "oracle cloud",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "openstack",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "digitalocean",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "heroku",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "vercel",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "netlify",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "cloudflare",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "aws lambda",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "azure functions",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "google cloud functions",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "cosmos db",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "cosmosdb",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "dynamodb",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "blob storage",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "s3",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "azure ai search",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "azure app service",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "azure web service",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "azure devops",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "entra id",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "microsoft entra",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "azure ad",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "active directory",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "cloud migration",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "iam",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "vpc",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "cloudformation",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "cdk",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "bicep",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "arm templates",
+   "kind": "cloud",
+   "aliases": []
+  },
+  {
+   "term": "langgraph",
+   "aliases": [],
+   "kind": "ai"
+  },
+  {
+   "term": "langchain",
+   "aliases": [],
+   "kind": "ai"
+  },
+  {
+   "term": "llamaindex",
+   "aliases": [
+    "llama index"
+   ],
+   "kind": "ai"
+  },
+  {
+   "term": "rag",
+   "aliases": [
+    "retrieval-augmented generation",
+    "retrieval augmented generation"
+   ],
+   "kind": "ai"
+  },
+  {
+   "term": "openai",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "anthropic",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "claude",
+   "aliases": [
+    "claude code"
+   ],
+   "kind": "ai"
+  },
+  {
+   "term": "gemini",
+   "aliases": [],
+   "kind": "ai"
+  },
+  {
+   "term": "github copilot",
+   "aliases": [
+    "copilot"
+   ],
+   "kind": "ai"
+  },
+  {
+   "term": "hugging face",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "huggingface",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "transformers",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "pytorch",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "tensorflow",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "keras",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "scikit-learn",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "sklearn",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "xgboost",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "lightgbm",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "mlflow",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "kubeflow",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "vertex ai",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "sagemaker",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "azure ml",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "azure openai",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "bedrock",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "vector database",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "pinecone",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "weaviate",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "qdrant",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "milvus",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "faiss",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "embeddings",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "fine-tuning",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "llm",
+   "aliases": [
+    "large language model",
+    "large language models"
+   ],
+   "kind": "ai"
+  },
+  {
+   "term": "ai agents",
+   "aliases": [
+    "agentic ai",
+    "agentic"
+   ],
+   "kind": "ai"
+  },
+  {
+   "term": "prompt engineering",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "model context protocol",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "mcp",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "computer vision",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "nlp",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "natural language processing",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "reinforcement learning",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "deep learning",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "machine learning",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "mlops",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "llmops",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "responsible ai",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "ai governance",
+   "kind": "ai",
+   "aliases": []
+  },
+  {
+   "term": "java",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "kotlin",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "scala",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "groovy",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "python",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "typescript",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "javascript",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "go",
+   "aliases": [
+    "golang"
+   ],
+   "kind": "language"
+  },
+  {
+   "term": "rust",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "c++",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "c#",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": ".net",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "dotnet",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "asp.net",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "php",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "ruby",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "perl",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "swift",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "objective-c",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "dart",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "r language",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "matlab",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "sas",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "spss",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "cobol",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "fortran",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "haskell",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "elixir",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "erlang",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "clojure",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "bash",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "powershell",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "sql",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "pl/sql",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "t-sql",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "nosql",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "graphql",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "solidity",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "abap",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "apex",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "vba",
+   "kind": "language",
+   "aliases": []
+  },
+  {
+   "term": "spring boot",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "spring",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "quarkus",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "micronaut",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "jakarta ee",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "hibernate",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "django",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "flask",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "fastapi",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "express",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "nestjs",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "next.js",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "nuxt",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "react",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "angular",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "vue",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "vue.js",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "svelte",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "redux",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "react native",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "flutter",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "android",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "ios",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "jquery",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "laravel",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "rails",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "ruby on rails",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "symfony",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": ".net core",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "blazor",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "wpf",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "unity",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "unreal",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "sass",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "scss",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "less",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "tailwind",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "bootstrap",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "trpc",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "deno",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "bun",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "node.js",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "nodejs",
+   "kind": "framework",
+   "aliases": []
+  },
+  {
+   "term": "databricks",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "pyspark",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "spark",
+   "aliases": [
+    "apache spark"
+   ],
+   "kind": "data"
+  },
+  {
+   "term": "hadoop",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "hive",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "airflow",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "dbt",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "snowflake",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "bigquery",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "redshift",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "synapse",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "data factory",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "kafka",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "rabbitmq",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "activemq",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "pulsar",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "flink",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "beam",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "elasticsearch",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "elastic search",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "opensearch",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "solr",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "postgresql",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "postgres",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "mysql",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "mariadb",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "oracle database",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "sql server",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "mongodb",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "cassandra",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "redis",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "neo4j",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "couchbase",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "influxdb",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "clickhouse",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "data modelling",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "data modeling",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "data governance",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "data warehouse",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "lakehouse",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "data lake",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "etl",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "elt",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "power bi",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "tableau",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "looker",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "metabase",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "qlik",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "grafana",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "kibana",
+   "kind": "data",
+   "aliases": []
+  },
+  {
+   "term": "docker",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "kubernetes",
+   "aliases": [
+    "k8s"
+   ],
+   "kind": "platform"
+  },
+  {
+   "term": "helm",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "istio",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "linkerd",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "argocd",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "argo cd",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "flux",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "terraform",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "pulumi",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "ansible",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "chef",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "puppet",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "vagrant",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "jenkins",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "gitlab ci",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "github actions",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "circleci",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "teamcity",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "bamboo",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "azure pipelines",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "ci/cd",
+   "aliases": [
+    "ci-cd",
+    "continuous integration",
+    "continuous deployment",
+    "continuous delivery"
+   ],
+   "kind": "platform"
+  },
+  {
+   "term": "gitops",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "prometheus",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "datadog",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "splunk",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "new relic",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "newrelic",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "appdynamics",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "dynatrace",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "opentelemetry",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "elk",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "nginx",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "apache",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "haproxy",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "linux",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "windows server",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "vmware",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "openshift",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "serverless",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "sre",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "site reliability",
+   "kind": "platform",
+   "aliases": []
+  },
+  {
+   "term": "microservices",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "microservice",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "monolith",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "event-driven",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "event-driven architecture",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "event sourcing",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "cqrs",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "ddd",
+   "aliases": [
+    "domain-driven design",
+    "domain driven design"
+   ],
+   "kind": "practice"
+  },
+  {
+   "term": "api design",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "api-driven design",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "rest",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "restful",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "openapi",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "swagger",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "grpc",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "soap",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "websocket",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "tdd",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "bdd",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "pair programming",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "code review",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "agile",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "scrum",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "kanban",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "safe",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "safe agilist",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "safer agilist",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "lean",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "itil",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "togaf",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "archimate",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "c4 model",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "uml",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "solution architecture",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "enterprise architecture",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "cloud architecture",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "system design",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "distributed systems",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "high availability",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "disaster recovery",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "performance tuning",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "observability",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "zero trust",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "devsecops",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "threat modelling",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "threat modeling",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "penetration testing",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "owasp",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "gdpr",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "iso 27001",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "soc 2",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "pci dss",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "hipaa",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "oauth2",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "oauth",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "oidc",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "openid connect",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "saml",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "sso",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "jwt",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "pki",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "encryption",
+   "kind": "practice",
+   "aliases": []
+  },
+  {
+   "term": "git",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "github",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "gitlab",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "bitbucket",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "jira",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "confluence",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "servicenow",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "salesforce",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "mulesoft",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "sap",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "workday",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "dynamics 365",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "sharepoint",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "power platform",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "power apps",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "power automate",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "figma",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "postman",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "swagger ui",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "selenium",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "cypress",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "playwright",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "puppeteer",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "jest",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "mocha",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "vitest",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "junit",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "testng",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "cucumber",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "jmeter",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "gatling",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "loadrunner",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "soapui",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "rest-assured",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "pytest",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "murex",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "calypso",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "bloomberg",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "reuters",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "fix protocol",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "matlab simulink",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "labview",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "plc",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "scada",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "embedded c",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "rtos",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "freertos",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "zephyr",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "yocto",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "can bus",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "autosar",
+   "kind": "tool",
+   "aliases": []
+  },
+  {
+   "term": "az-900",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "az-104",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "az-204",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "az-305",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "az-400",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "az-500",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "ai-900",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "ai-102",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "dp-203",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "aws certified solutions architect",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "aws certified developer",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "aws certified devops engineer",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "aws certified cloud practitioner",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "google cloud architect",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "google professional cloud architect",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "cka",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "ckad",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "cks",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "ccna",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "ccnp",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "ccie",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "cissp",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "cism",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "ceh",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "comptia security+",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "pmp",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "prince2",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "csm",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "psm",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "safe agilist certification",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "togaf certified",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "itil foundation",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "hashicorp certified",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "terraform associate",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "databricks certified",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "snowflake snowpro",
+   "kind": "certification",
+   "aliases": []
+  },
+  {
+   "term": "oracle certified",
+   "kind": "certification",
+   "aliases": []
+  }
+ ]
+}

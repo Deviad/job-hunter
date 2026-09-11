@@ -3,63 +3,15 @@
 // Shows: new jobs saved, newly scored fit>=60, stage changes. Watermark stored in jh_meta.
 // Usage: node jh-digest.mjs [--json] [--dry-run]   (--dry-run: don't advance watermark)
 import { openDb, DB_PATH } from './jh-common.mjs';
-import { ROLE_LABELS } from './role-taxonomy.mjs';
+import { ROLE_LABEL_SET, UNCLASSIFIED_ROLE_LABEL, canonicalRoleLabel, rawRoleLabel } from './role-labels.mjs';
+import { configuredFitThreshold } from './jh-profile.mjs';
+const fitThreshold = configuredFitThreshold();
 
 const args = process.argv.slice(2);
 const asJson = args.includes('--json');
 const dryRun = args.includes('--dry-run');
 const db = await openDb();
-const ROLE_LABEL_SET = new Set(ROLE_LABELS);
-const UNCLASSIFIED_ROLE_LABEL = 'Unclassified';
-const ROLE_LABEL_ALIASES = new Map([
-  ['exact architecture', 'Exact architecture'],
-  ['adjacent technical', 'Adjacent technical'],
-  ['leadership progression', 'Leadership progression'],
-  ['leadership lateral', 'Leadership lateral'],
-  ['conditional', 'Conditional'],
-  ['data domain stretch', 'Data-domain stretch'],
-  ['out of scope', 'Out of scope'],
-  ['core architecture', 'Exact architecture'],
-  ['ai architecture', 'Exact architecture'],
-  ['ai architect', 'Exact architecture'],
-  ['ai architect agentic systems', 'Exact architecture'],
-  ['genai lead architect', 'Exact architecture'],
-  ['ai ml data architect', 'Data-domain stretch'],
-  ['data ai architect', 'Data-domain stretch'],
-  ['ai security architect', 'Exact architecture'],
-  ['ai software architect', 'Exact architecture'],
-  ['ai solution architect', 'Exact architecture'],
-  ['data architect', 'Out of scope'],
-  ['non it architecture', 'Out of scope'],
-  ['not matching ai architect scope', 'Out of scope'],
-  ['out scope', 'Out of scope'],
-  ['out-of-scope', 'Out of scope'],
-]);
 const NO_REASON = 'No role classification reason recorded.';
-
-function labelKey(value) {
-  return String(value ?? '')
-    .normalize('NFKD')
-    .replace(/\p{Diacritic}/gu, '')
-    .toLowerCase()
-    .replace(/&/g, ' and ')
-    .replace(/[_/]+/g, ' ')
-    .replace(/[–—-]+/g, ' ')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function rawRoleLabel(value) {
-  if (value == null) return '';
-  return String(value).trim();
-}
-
-function canonicalRoleLabel(value) {
-  const raw = rawRoleLabel(value);
-  if (ROLE_LABEL_SET.has(raw)) return raw;
-  return ROLE_LABEL_ALIASES.get(labelKey(raw)) || UNCLASSIFIED_ROLE_LABEL;
-}
 
 function boolValue(value) {
   if (typeof value === 'string') return /^(?:1|true|yes)$/i.test(value.trim());
@@ -171,8 +123,8 @@ const newHits = db.prepare(`
          j.role_family_inferred, j.role_family_confidence, j.role_family_reason,
          CASE WHEN j.description_text IS NULL OR TRIM(j.description_text) = '' THEN 0 ELSE 1 END AS role_has_full_jd
   FROM match_results m JOIN jobs j ON j.source=m.source AND j.job_id=m.job_id
-  WHERE m.created_at > ? AND m.fit_score >= 60
-  ORDER BY m.fit_score DESC, m.created_at DESC`).all(since).map(withRoleReport);
+  WHERE m.created_at > ? AND m.fit_score >= ?
+  ORDER BY m.fit_score DESC, m.created_at DESC`).all(since, fitThreshold).map(withRoleReport);
 
 let stageChanges = [];
 if (db.prepare(`SELECT 1 FROM sqlite_master WHERE name='application_stage_events'`).get()) {
@@ -215,7 +167,7 @@ for (const group of out.roleFamilyAudit.newJobs) {
   console.log(`  ${group.role_family_label}: ${group.n} (full-JD ${group.fullJd}, provisional ${group.provisional})`);
 }
 
-console.log(`\nNewly scored fit>=60: ${newHits.length}`);
+console.log(`\nNewly scored fit>=${fitThreshold}: ${newHits.length}`);
 for (const h of newHits.slice(0, 20)) console.log(`  [${h.fit_score}] ${h.cta} — ${roleLine(h)} — ${h.title ?? '?'} @ ${h.company ?? '?'} (${h.source}:${h.job_id})`);
 if (newHits.length > 20) console.log(`  ... and ${newHits.length - 20} more`);
 

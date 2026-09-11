@@ -7,6 +7,9 @@ import { pathToFileURL } from 'node:url';
 import { startCdpKeepAlive } from '../../linkedin-job-search/scripts/cdp-keepalive.mjs';
 import { tryAcquireLease } from '../../linkedin-job-search/scripts/cdp-lease.mjs';
 import { classifyRole, assertRoleClassification, expandRoleQueries } from '../../job-hunter/scripts/role-taxonomy.mjs';
+import { loadProfile } from '../../job-hunter/scripts/jh-profile.mjs';
+import { loadDataFile } from '../../job-hunter/scripts/jh-profile-extract.mjs';
+let activeTaxonomy = null;
 
 const JOBHUNTER_HOME = process.env.JOBHUNTER_HOME || path.join(process.env.HOME || process.cwd(), '.job-hunter');
 const DEFAULT_DB = process.env.JOBHUNTER_DB || path.join(JOBHUNTER_HOME, 'jobhunter.sqlite');
@@ -28,7 +31,7 @@ Options:
   --sort <date|relevance>         Sort order (default: date)
   --max-queries <n>               Maximum bounded taxonomy query expansion (default: 8)
   --no-query-expansion            Search only the supplied --query
-  --speaks <csv>                  Languages the user can satisfy (default: English,Italian)
+  --speaks <csv>                  Languages the user can satisfy (default: confirmed profile)
   --exclude-languages <csv>       Required languages that should skip a role
   --include-skipped               Include skipped jobs in --out/--save
   --cdp-port <port>               CDP port for active browser session (default: ${DEFAULT_CDP_PORT})
@@ -52,7 +55,7 @@ function parseArgs(argv) {
     sort: 'date',
     maxQueries: 8,
     queryExpansion: true,
-    speaks: ['English', 'Italian'],
+    speaks: [],
     excludeLanguages: [],
     includeSkipped: false,
     cdpPort: DEFAULT_CDP_PORT,
@@ -413,10 +416,7 @@ function uniq(values) {
   return [...new Set(values.map((v) => String(v || '').trim()).filter(Boolean))];
 }
 
-const KNOWN_LANGUAGES = [
-  'English', 'Italian', 'German', 'French', 'Spanish', 'Portuguese', 'Dutch', 'Polish',
-  'Swedish', 'Norwegian', 'Danish', 'Finnish', 'Example Location 057n', 'Example Company 094n', 'Chinese', 'Arabic',
-];
+const KNOWN_LANGUAGES = Object.keys(loadDataFile('language-aliases.json').languages);
 
 function escapeRe(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -444,16 +444,19 @@ function parseLanguages(text) {
 function languageDecision(requirements, opts) {
   const speaks = new Set(opts.speaks.map((s) => s.toLowerCase()));
   const excludes = new Set(opts.excludeLanguages.map((s) => s.toLowerCase()));
-  const failing = requirements.required.filter((lang) => !speaks.has(lang.toLowerCase()) || excludes.has(lang.toLowerCase()));
+  const failing = requirements.required.filter((lang) => excludes.has(lang.toLowerCase()));
+  const unknown = requirements.required.filter((lang) => !speaks.has(lang.toLowerCase()) && !excludes.has(lang.toLowerCase()));
   if (failing.length) return { include: false, reason: `SKIP: requires ${failing.join(', ')}` };
+  if (unknown.length) return { include: true, unknown, reason: `REVIEW: confirm proficiency in ${unknown.join(', ')}` };
   if (requirements.required.length) return { include: true, reason: `PASS: required languages satisfied (${requirements.required.join(', ')})` };
   return { include: true, reason: 'PASS: no required non-user languages found' };
 }
 
-function classifyForIndeed(job) {
+function classifyForIndeed(job, taxonomy = activeTaxonomy) {
   const title = String(job.title || '').trim();
   const evidenceText = `${job.title || ''}\n${job.descriptionText || ''}\n${job.jobFunction || ''}\n${job.industries || ''}`;
   const classification = assertRoleClassification(classifyRole({
+    taxonomy,
     title,
     descriptionText: job.descriptionText,
     jobFunction: job.jobFunction,
@@ -536,7 +539,7 @@ function normalizeJob(searchJob, detail, opts) {
     jobFunction,
     industries,
     provisional,
-  });
+  }, opts.taxonomy || activeTaxonomy);
   const classification = role.classification;
   const include = lang.include && role.include;
   const languageFilterReason = include ? lang.reason : [lang.reason, role.reason].filter((r) => !/^PASS/.test(r)).join('; ') || lang.reason;
@@ -596,6 +599,11 @@ function compact(job) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  const profile = loadProfile({ requireConfirmed: true });
+  activeTaxonomy = profile.taxonomy;
+  opts.taxonomy = profile.taxonomy;
+  opts.speaks = opts.speaks?.length ? opts.speaks : profile.speaks;
+  opts.excludeLanguages = [...new Set([...(opts.excludeLanguages || []), ...profile.excludeLanguages])];
 
   // ── Cross-process CDP coordination ────────────────────────────────
   // Coordination, not prohibition: proceed without the lease if another
@@ -609,7 +617,7 @@ async function main() {
   }
 
   const expandedQueries = opts.queryExpansion
-    ? expandRoleQueries({ targetRole: opts.query, maxQueries: opts.maxQueries })
+    ? expandRoleQueries({ targetRole: opts.query, maxQueries: opts.maxQueries, taxonomy: activeTaxonomy })
     : [];
   opts.searchQueries = uniq([opts.query, ...expandedQueries]).slice(0, opts.maxQueries);
   if (!opts.searchQueries.length) opts.searchQueries = [opts.query];

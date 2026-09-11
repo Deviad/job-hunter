@@ -7,8 +7,13 @@
  * No live CDP calls — all fixture-based.
  */
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import {
+  passesLanguage,
+  buildQueryPlan,
   buildQueries,
   bypassRefreshIds,
   mergeExplicitRefreshIds,
@@ -20,6 +25,80 @@ import * as roleTaxonomy from '../../job-hunter/scripts/role-taxonomy.mjs';
 
 let passed = 0;
 let failed = 0;
+
+const fixtureHome = mkdtempSync(path.join(tmpdir(), 'linkedin-search-profile-'));
+const taxonomy = JSON.parse(readExampleTaxonomy());
+writeFileSync(path.join(fixtureHome, 'personal-info-cache.json'), JSON.stringify({
+  schemaVersion: 2,
+  languages: { English: 'fluent' },
+  rolePreferences: {
+    preferredPrimaryRoles: ['AI Architect'],
+    adjacentRoles: {
+      adjacentTechnicalLeadership: ['AI Platform Lead'],
+      leadershipProgression: ['Head of AI Engineering'],
+    },
+    taxonomy,
+  },
+}, null, 2));
+writeFileSync(path.join(fixtureHome, 'profile-derived.json'), JSON.stringify({
+  schemaVersion: 1,
+  extractorVersion: 'cv-v1',
+  cvPath: path.join(fixtureHome, 'CV.docx'),
+  cvSha256: 'fixture-cv-sha',
+  referenceDataSha256: null,
+  generatedAt: '2026-09-11T00:00:00.000Z',
+  skills: [],
+  certifications: [],
+  languages: [{ name: 'English', level: 'fluent', evidence: 'fixture' }],
+  titles: { values: ['AI Architect'] },
+  counts: { skills: 0, certifications: 0, languages: 1, titles: 1 },
+}, null, 2));
+process.env.JOBHUNTER_HOME = fixtureHome;
+
+function readExampleTaxonomy() {
+  return JSON.stringify({
+    schemaVersion: 1,
+    name: 'ai-architect-fixture',
+    domainTokens: ['ai', 'artificial intelligence', 'genai', 'generative ai', 'llm', 'machine learning', 'mlops'],
+    disciplineTokens: ['architect', 'architecture', 'technical direction', 'system design', 'production architecture'],
+    adjacentTitles: ['principal ai engineer', 'ai platform lead', 'mlops architect'],
+    leadershipTitles: ['head of ai engineering', 'engineering manager ai platform'],
+    gapSkills: [{ name: 'Databricks', pattern: '\\bdatabricks\\b' }],
+    gapRoleTitlePattern: '\\bdata and ai architect\\b',
+    conditionalTerms: ['pre-sales', 'ai governance'],
+    queryExpansions: [
+      'AI Architect',
+      'Generative AI Architect',
+      'GenAI Architect',
+      'Enterprise AI Architect',
+      'AI Platform Architect',
+      'AI Solutions Architect',
+      'Applied AI Architect',
+      'Forward Deployed Architect',
+      'Forward Deployed Engineer',
+      'Principal AI Engineer',
+      'MLOps Architect',
+      'Head of AI Engineering',
+      'AI Security Specialist',
+      'Data & AI Architect',
+    ],
+    queryExclusionTerms: ['software engineer', 'data scientist'],
+    excludedTitleFamilies: ['building-architecture'],
+  });
+}
+
+test('language filtering distinguishes unknown from an explicitly excluded language', () => {
+  const requirements = { required: ['Dutch'], niceToHave: [] };
+  const unknown = passesLanguage(requirements, { speaks: ['English'], excludeLanguages: [] });
+  assert.equal(unknown.pass, true);
+  assert.deepEqual(unknown.unknown, ['Dutch']);
+  assert.equal(passesLanguage(requirements, { speaks: ['English'], excludeLanguages: ['Dutch'] }).pass, false);
+});
+
+test('collector does not reintroduce a query removed by user preferences', () => {
+  const profile = { roles: { primary: ['Civil Engineer'], adjacent: ['Project Manager'], leadership: [] }, taxonomy: { queryExclusionTerms: ['Project Manager'] } };
+  assert.deepEqual(buildQueryPlan({ role: 'Civil Engineer' }, profile).queries, ['Civil Engineer']);
+});
 
 function test(name, fn) {
   try {
@@ -39,6 +118,7 @@ const taxonomyQueries = roleTaxonomy.expandRoleQueries({
   targetRole: 'AI Architect',
   similarRoles: [],
   maxQueries: 32,
+  taxonomy,
 });
 
 test('buildQueries returns taxonomy-expanded queries for AI Architect role', () => {
@@ -46,7 +126,7 @@ test('buildQueries returns taxonomy-expanded queries for AI Architect role', () 
     role: 'AI Architect',
     similarRoles: [],
     roleVariants: true,
-  });
+  }, { roles: { primary: ['AI Architect'], adjacent: [], leadership: [] }, taxonomy });
   assert.ok(queries.length > 5, 'should produce more than the old 5-title list');
   for (const tq of taxonomyQueries) {
     assert.ok(queries.includes(tq), `taxonomy query "${tq}" missing from buildQueries output`);
@@ -58,7 +138,7 @@ test('buildQueries no longer maintains a private five-title list', () => {
     role: 'AI Architect',
     similarRoles: [],
     roleVariants: true,
-  });
+  }, { roles: { primary: ['AI Architect'], adjacent: [], leadership: [] }, taxonomy });
   // Old private list: Artificial Intelligence Architect, AI Solution Architect,
   // Enterprise AI Architect, GenAI Architect, Data AI Architect.
   // These must now come from the taxonomy expansion, not a private list.
@@ -71,7 +151,7 @@ test('buildQueries respects 32-query hard cap', () => {
     role: 'AI Architect',
     similarRoles: [],
     roleVariants: true,
-  });
+  }, { roles: { primary: ['AI Architect'], adjacent: [], leadership: [] }, taxonomy });
   assert.ok(queries.length <= 32, `got ${queries.length}, expected <= 32`);
 });
 
@@ -80,7 +160,7 @@ test('buildQueries includes supplementary families not in taxonomy', () => {
     role: 'AI Architect',
     similarRoles: [],
     roleVariants: true,
-  });
+  }, { roles: { primary: ['AI Architect'], adjacent: [], leadership: [] }, taxonomy });
   assert.ok(queries.includes('Applied AI Architect'), 'Applied AI Architect supplementary');
   assert.ok(queries.includes('Forward Deployed Architect'), 'Forward Deployed Architect supplementary');
   assert.ok(queries.includes('Forward Deployed Engineer'), 'Forward Deployed Engineer supplementary');
@@ -107,19 +187,23 @@ test('buildQueries with explicit queries bypasses expansion', () => {
 
 // ── getQueryFamily: query-family provenance ────────────────────────────
 
-test('getQueryFamily returns correct families for known queries', () => {
-  assert.equal(getQueryFamily('AI Architect'), 'core-architect');
-  assert.equal(getQueryFamily('AI Platform Architect'), 'platform-mlops');
-  assert.equal(getQueryFamily('MLOps Architect'), 'platform-mlops');
-  assert.equal(getQueryFamily('Principal AI Engineer'), 'principal-staff-lead');
-  assert.equal(getQueryFamily('AI Solutions Architect'), 'solutions-field');
-  assert.equal(getQueryFamily('Head of AI Engineering'), 'leadership');
-  assert.equal(getQueryFamily('AI Security Specialist'), 'security-governance');
-  assert.equal(getQueryFamily('Data & AI Architect'), 'data-ai');
-  assert.equal(getQueryFamily('Enterprise AI Architect'), 'enterprise');
-  assert.equal(getQueryFamily('GenAI Architect'), 'generative-ai');
-  assert.equal(getQueryFamily('Applied AI Architect'), 'applied-ai-architect');
-  assert.equal(getQueryFamily('Forward Deployed Architect'), 'forward-deployed');
+test('getQueryFamily returns profile-relative families with a query context', () => {
+  const plan = buildQueryPlan({
+    role: 'AI Architect',
+    similarRoles: ['AI Platform Lead'],
+    roleVariants: true,
+  }, {
+    roles: {
+      primary: ['AI Architect'],
+      adjacent: ['AI Platform Lead'],
+      leadership: ['Head of AI Engineering'],
+    },
+    taxonomy,
+  });
+  assert.equal(getQueryFamily('AI Architect', plan.context), 'primary');
+  assert.equal(getQueryFamily('AI Platform Lead', plan.context), 'adjacent');
+  assert.equal(getQueryFamily('Head of AI Engineering', plan.context), 'leadership');
+  assert.equal(getQueryFamily('Forward Deployed Architect', plan.context), 'expansion');
 });
 
 test('getQueryFamily returns user-supplied for unrecognized queries', () => {
@@ -246,8 +330,13 @@ test('queryFamilies array maps each query to a family', () => {
     role: 'AI Architect',
     similarRoles: [],
     roleVariants: true,
-  });
-  const queryFamilies = queries.map((q) => ({ query: q, family: getQueryFamily(q) }));
+  }, { roles: { primary: ['AI Architect'], adjacent: [], leadership: [] }, taxonomy });
+  const plan = buildQueryPlan({
+    role: 'AI Architect',
+    similarRoles: [],
+    roleVariants: true,
+  }, { roles: { primary: ['AI Architect'], adjacent: [], leadership: [] }, taxonomy });
+  const queryFamilies = queries.map((q) => ({ query: q, family: getQueryFamily(q, plan.context) }));
   assert.equal(queryFamilies.length, queries.length);
   for (const entry of queryFamilies) {
     assert.ok(entry.query, 'query must be non-empty');

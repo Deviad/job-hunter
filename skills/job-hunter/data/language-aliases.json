@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "description": "Generic language name aliases used to recognize language requirements in job descriptions and language evidence in a CV. No entry implies that any user speaks the language.",
+  "languages": {
+    "English": ["english"],
+    "German": ["german", "deutsch"],
+    "French": ["french", "français", "francais"],
+    "Spanish": ["spanish", "español", "espanol", "castellano"],
+    "Italian": ["italian", "italiano"],
+    "Portuguese": ["portuguese", "português", "portugues"],
+    "Dutch": ["dutch", "nederlands", "flemish"],
+    "Danish": ["danish", "dansk"],
+    "Swedish": ["swedish", "svenska"],
+    "Norwegian": ["norwegian", "norsk"],
+    "Finnish": ["finnish", "suomi"],
+    "Polish": ["polish", "polski"],
+    "Czech": ["czech", "čeština", "cestina"],
+    "Slovak": ["slovak", "slovenčina"],
+    "Hungarian": ["hungarian", "magyar"],
+    "Romanian": ["romanian", "română", "romana"],
+    "Bulgarian": ["bulgarian"],
+    "Greek": ["greek", "ελληνικά"],
+    "Turkish": ["turkish", "türkçe", "turkce"],
+    "Russian": ["russian", "русский"],
+    "Ukrainian": ["ukrainian", "українська"],
+    "Arabic": ["arabic", "العربية"],
+    "Hebrew": ["hebrew", "עברית"],
+    "Hindi": ["hindi"],
+    "Chinese": ["chinese", "mandarin", "cantonese", "中文", "普通话"],
+    "Japanese": ["japanese", "日本語"],
+    "Korean": ["korean", "한국어"]
+  },
+  "proficiencyLevels": {
+    "native": ["native", "mother tongue", "mothertongue", "bilingual", "madrelingua", "muttersprache", "langue maternelle"],
+    "c2": ["c2", "proficient", "proficiency", "near-native", "near native"],
+    "c1": ["c1", "fluent", "fluency", "advanced", "full professional", "professional working", "professional"],
+    "b2": ["b2", "upper intermediate", "upper-intermediate", "working knowledge", "business"],
+    "b1": ["b1", "intermediate", "conversational", "limited working"],
+    "a2": ["a2", "elementary", "pre-intermediate"],
+    "a1": ["a1", "basic", "beginner", "elementary proficiency"]
+  },
+  "usableLevels": ["native", "c2", "c1", "b2"]
+}

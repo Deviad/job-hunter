@@ -3,6 +3,7 @@ import { WebSocketModule } from '../../job-hunter/scripts/workspace-dependencies
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { loadProfile, resolveCountry } from '../../job-hunter/scripts/jh-profile.mjs';
 const require = createRequire(import.meta.url);
 let WebSocket;
 try { WebSocket = WebSocketModule; }
@@ -17,12 +18,26 @@ function splitList(value, fallback) {
     ? String(value).split(/[;,]/).map(s => s.trim()).filter(Boolean)
     : fallback;
 }
+function profileDefaults() {
+  try {
+    const profile = loadProfile({ requireConfirmed: true });
+    return {
+      locations: profile.targetCountries.map((code) => resolveCountry(code).location),
+      queries: profile.roles.all.slice(0, 16),
+    };
+  } catch {
+    return { locations: [], queries: [] };
+  }
+}
+const defaults = profileDefaults();
 const RUN_DIR = argValue('--run-dir', process.env.RUN_DIR || process.cwd());
 const OUT = argValue('--out', path.join(RUN_DIR, 'visible-listings.json'));
 const SUMMARY = argValue('--summary', path.join(RUN_DIR, 'visible-listings-summary.json'));
 const PORT = Number(argValue('--cdp-port', process.env.BROWSER_CDP_PORT || 9225));
-const locations = splitList(argValue('--locations', process.env.LOCATIONS || ''), ['United Kingdom', 'Ireland', 'Denmark', 'Netherlands']);
-const queries = splitList(argValue('--queries', process.env.QUERIES || ''), ['AI Architect', 'AI Solution Architect', 'Enterprise AI Architect', 'Generative AI Architect']);
+const locations = splitList(argValue('--locations', process.env.LOCATIONS || ''), defaults.locations);
+const queries = splitList(argValue('--queries', process.env.QUERIES || ''), defaults.queries);
+if (!locations.length) throw new Error('No locations supplied and profile target countries are empty');
+if (!queries.length) throw new Error('No queries supplied and profile roles are empty');
 const countryByLocation = new Map([
   ['United Kingdom', 'GB'], ['Ireland', 'IE'], ['Denmark', 'DK'], ['Netherlands', 'NL'],
 ]);

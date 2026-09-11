@@ -1,100 +1,23 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import {
-  backfillRows,
-  classifyListing,
-  extractBackfill,
-  insertDiscoveredRows,
-  rowFromResult,
-} from './jh-discover.mjs';
-
-const provisional = classifyListing({
-  title: 'AI Architect',
-  descriptionText: 'Design production AI systems and own platform architecture.',
-  provisional: true,
-});
-assert.equal(provisional.label, 'Exact architecture');
-assert.equal(provisional.provisional, true);
+import { backfillRows as rawBackfillRows, classifyListing as rawClassifyListing, extractBackfill, insertDiscoveredRows, rowFromResult as rawRowFromResult } from './jh-discover.mjs';
+const taxonomy = { primaryTitles: ['Registered Nurse'], adjacentTitles: ['Clinical Educator'], leadershipTitles: ['Head of AI Engineering'], queryExclusionTerms: ['Veterinary Nurse'] };
+const classifyListing = (input) => rawClassifyListing({ ...input, taxonomy });
+const rowFromResult = (result, query, location) => rawRowFromResult(result, query, location, taxonomy);
+const backfillRows = (db, opts, rows) => rawBackfillRows(db, { ...opts, taxonomy }, rows);
+const provisional = classifyListing({ title: 'Registered Nurse', descriptionText: 'Patient care.', provisional: true });
+assert.equal(provisional.label, 'Primary role');
 assert.ok(provisional.confidence <= 0.65);
 assert.equal(provisional.reason.queryUsedAsEvidence, false);
-
-const dataAndAi = classifyListing({
-  title: 'Data & AI Architect',
-  descriptionText: 'Design AI system architecture; data modelling and governance are secondary responsibilities.',
-  provisional: false,
-});
-assert.equal(dataAndAi.label, 'Data-domain stretch');
-assert.equal(dataAndAi.provisional, false);
-
-assert.equal(classifyListing({
-  title: 'Principal Data Architect',
-  descriptionText: 'Own enterprise data architecture and warehouse strategy.',
-}).label, 'Out of scope');
-assert.equal(classifyListing({
-  title: 'Lead Software Engineer — AI Platform',
-  descriptionText: 'Own AI platform architecture and technical direction.',
-}).label, 'Out of scope');
-
-const validStub = rowFromResult({
-  url: 'https://jobs.lever.co/example/ai-architect',
-  title: 'AI Architect',
-  content: 'Design production AI systems and own platform architecture.',
-}, 'AI Architect', 'Ireland');
-assert.ok(validStub);
-assert.equal(validStub.role_family_inferred, 'Exact architecture');
-assert.equal(validStub.role_family_confidence <= 0.65, true);
-assert.equal(JSON.parse(validStub.role_family_reason).queryUsedAsEvidence, false);
-
-assert.equal(rowFromResult({
-  url: 'https://jobs.lever.co/example/data-architect',
-  title: 'Principal Data Architect',
-  content: 'Own enterprise data architecture and warehouse strategy.',
-}, 'AI Architect', 'Ireland'), null);
-assert.equal(rowFromResult({
-  url: 'https://jobs.lever.co/example/software-engineer',
-  title: 'Principal Software Engineer — AI',
-  content: 'Own AI platform architecture and technical direction.',
-}, 'AI Architect', 'Ireland'), null);
-assert.equal(rowFromResult({
-  url: 'https://jobs.lever.co/example/enterprise-architect',
-  title: 'Enterprise Architect',
-  content: 'Own ERP architecture.',
-}, 'AI Architect', 'Ireland'), null, 'search query must not become classification evidence');
-const queryTitleBackfill = extractBackfill(
-  'https://jobs.lever.co/example/query-title',
-  `<script type="application/ld+json">${JSON.stringify({ '@type': 'JobPosting', title: 'AI Architect', description: 'Customer success and account coordination responsibilities.' })}</script><title>AI Architect</title>`,
-  'AI Architect',
-  'AI Architect',
-);
-assert.equal(queryTitleBackfill.title, '', 'backfill must not use the search query as the job title evidence');
-assert.equal(classifyListing({ title: queryTitleBackfill.title, descriptionText: queryTitleBackfill.description_text, provisional: false }).label, 'Out of scope');
-
-const provisionalLeadership = rowFromResult({
-  url: 'https://jobs.lever.co/example/head-ai-engineering',
-  title: 'Head of AI Engineering',
-  content: 'Lead hiring, people management, and roadmap ownership for an AI engineering function.',
-}, 'AI Architect', 'Ireland');
-assert.ok(provisionalLeadership, 'AI-central provisional out-of-scope stubs must survive for JD backfill');
-assert.equal(provisionalLeadership.role_family_inferred, 'Out of scope');
-assert.equal(classifyListing({
-  title: 'Head of AI Engineering',
-  descriptionText: 'Own technical direction, architecture quality, engineering standards, and platform strategy for an AI platform. Manage 10 engineers across 2 teams.',
-  provisional: false,
-}).label, 'Leadership progression');
-
-const provisionalData = rowFromResult({
-  url: 'https://jobs.lever.co/example/data-ai-architect',
-  title: 'Data & AI Architect',
-  content: 'Own data modelling, governance, lakehouse, warehouse, Spark, Databricks, and Snowflake.',
-}, 'AI Architect', 'Ireland');
-assert.ok(provisionalData, 'Data & AI stubs must survive until the full JD distinguishes stretch from data-dominated scope');
-assert.equal(provisionalData.role_family_inferred, 'Out of scope');
-assert.equal(classifyListing({
-  title: 'Data & AI Architect',
-  descriptionText: 'Design AI system architecture; data governance and warehouse are secondary responsibilities.',
-  provisional: false,
-}).label, 'Data-domain stretch');
+const validStub = rowFromResult({ url: 'https://jobs.lever.co/example/nurse', title: 'Registered Nurse', content: 'Patient care.' }, 'Registered Nurse', 'Ireland');
+assert.equal(validStub.role_family_inferred, 'Primary role');
+assert.equal(rowFromResult({ url: 'https://jobs.lever.co/example/vet', title: 'Veterinary Nurse', content: 'Animal care.' }, 'Registered Nurse', 'Ireland'), null);
+const unknown = rowFromResult({ url: 'https://jobs.lever.co/example/other', title: 'Care Coordinator', content: 'Coordinate appointments.' }, 'Registered Nurse', 'Ireland');
+assert.equal(unknown.role_family_inferred, 'Unclassified', 'unknown titles remain review candidates');
+assert.equal(classifyListing({ title: '', descriptionText: 'Our team has registered nurses.', query: 'Registered Nurse' }).label, 'Unclassified');
+const queryTitleBackfill = extractBackfill('https://jobs.lever.co/example/query-title', '<title>Registered Nurse</title>', 'Registered Nurse', 'Registered Nurse');
+assert.equal(queryTitleBackfill.title, '', 'query must not supply missing title evidence');
 
 const newRow = { source: 'external', job_id: 'new-job' };
 const existingRow = { source: 'external', job_id: 'existing-job' };

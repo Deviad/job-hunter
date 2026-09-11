@@ -16,5 +16,19 @@
   "companySpecific": {},
   "portalCredentials": {},
   "notes": "",
-  "rolePreferences": {}
+  "rolePreferences": {
+    "preferredPrimaryRoles": [],
+    "adjacentRoles": {
+      "acceptedRoles": [],
+      "adjacentTechnicalLeadership": [],
+      "leadershipProgression": []
+    },
+    "excludedTitleFamilies": [],
+    "queryExclusionTerms": [],
+    "excludedResponsibilityTerms": [],
+    "conditionalRoles": [],
+    "taxonomy": null
+  },
+  "languages": {},
+  "skills": []
 }

@@ -1,105 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  classifyForIndeed,
-  expandRoleQueries,
-  normalizeJob,
-  parseArgs,
-} from '../scripts/search-indeed-jobs.mjs';
-
-const opts = {
-  domain: 'https://uk.indeed.com',
-  query: 'AI Architect',
-  location: 'London',
-  speaks: [],
-  excludeLanguages: [],
-};
-
-function label(input) {
-  return classifyForIndeed(input).classification.label;
-}
-
-test('retains --query and --q compatibility', () => {
-  assert.equal(parseArgs(['--query', 'AI Architect', '--location', 'London']).query, 'AI Architect');
-  assert.equal(parseArgs(['--q', 'AI Architect', '--location', 'London']).query, 'AI Architect');
+import { classifyForIndeed, expandRoleQueries, normalizeJob, parseArgs } from '../scripts/search-indeed-jobs.mjs';
+const taxonomy = { primaryTitles: ['Civil Engineer'], adjacentTitles: ['Structural Engineer'], leadershipTitles: ['Project Manager'], queryExclusionTerms: ['Sales Engineer'], queryExpansions: ['Structural Engineer', 'Project Manager'] };
+const opts = { domain: 'https://uk.indeed.com', query: 'Civil Engineer', location: 'London', speaks: [], excludeLanguages: [], taxonomy };
+test('query and q remain compatible', () => {
+  assert.equal(parseArgs(['--query', 'Civil Engineer', '--location', 'London']).query, 'Civil Engineer');
+  assert.equal(parseArgs(['--q', 'Civil Engineer', '--location', 'London']).query, 'Civil Engineer');
 });
-
-test('expands relevant queries within the CLI bound', () => {
-  const queries = expandRoleQueries({ targetRole: 'AI Architect', maxQueries: 5 });
-  assert.equal(queries.length, 5);
-  assert.equal(queries[0], 'AI Architect');
-  assert.ok(queries.includes('Generative AI Architect'));
-  assert.equal(expandRoleQueries({ targetRole: 'Backend Engineer', maxQueries: 10 }).length, 1);
+test('only configured expansions are used and bounds apply', () => {
+  assert.deepEqual(expandRoleQueries({ targetRole: opts.query, taxonomy, maxQueries: 2 }), ['Civil Engineer', 'Structural Engineer']);
+  assert.deepEqual(expandRoleQueries({ targetRole: opts.query }), ['Civil Engineer']);
 });
-
-test('uses only JD evidence, not query text, for classification', () => {
-  const withoutQuery = classifyForIndeed({
-    title: 'Platform Architect',
-    descriptionText: 'Own platform architecture and system design for production services.',
-    query: 'AI Architect',
-  });
-  const withDifferentQuery = classifyForIndeed({
-    title: 'Platform Architect',
-    descriptionText: 'Own platform architecture and system design for production services.',
-    query: 'Generative AI Architect',
-  });
-  assert.deepEqual(withDifferentQuery.classification, withoutQuery.classification);
-  assert.equal(withoutQuery.classification.reason.queryUsedAsEvidence, false);
-  assert.equal(withoutQuery.classification.signals.queryUsed, false);
-});
-
-test('reclassifies a result after detail extraction', () => {
-  const result = normalizeJob(
-    {
-      jobId: '1',
-      title: 'AI Architect',
-      cardDescriptionText: 'AI platform role',
-      url: 'https://uk.indeed.com/viewjob?jk=1',
-    },
-    {
-      title: 'Software Engineer - AI',
-      descriptionText: 'Implement AI services in production.',
-      descriptionExtracted: true,
-    },
-    opts,
-  );
-  assert.equal(result.roleFamilyInferred, 'Out of scope');
+test('detail extraction reclassifies the final title using the same preferences', () => {
+  const result = normalizeJob({ jobId: '1', title: 'Civil Engineer' }, { title: 'Structural Engineer', descriptionText: 'Design structures.', descriptionExtracted: true }, opts);
+  assert.equal(result.roleFamilyInferred, 'Adjacent role');
   assert.equal(result.roleClassificationProvisional, false);
 });
-
-test('falls back to the listing title when detail omits it', () => {
-  const result = normalizeJob(
-    {
-      jobId: '2',
-      title: 'Software Engineer - AI',
-      cardDescriptionText: 'Build AI services.',
-    },
-    { descriptionText: 'Build AI services in production.', descriptionExtracted: true },
-    opts,
-  );
+test('listing title remains evidence when detail omits it', () => {
+  const result = normalizeJob({ jobId: '2', title: 'Sales Engineer' }, { descriptionText: 'Sales.', descriptionExtracted: true }, opts);
   assert.equal(result.roleFamilyInferred, 'Out of scope');
-  assert.equal(result.title, 'Software Engineer - AI');
+  assert.equal(result.title, 'Sales Engineer');
 });
-
-test('caps card-only classifications as provisional', () => {
-  const result = normalizeJob(
-    { jobId: '3', title: 'AI Architect', cardDescriptionText: 'AI platform role.' },
-    { descriptionExtracted: false },
-    opts,
-  );
-  assert.equal(result.roleClassificationProvisional, true);
-  assert.ok(result.roleFamilyConfidence <= 0.65);
+test('provisional confidence is capped and queries never change classification', () => {
+  const input = { title: 'Civil Engineer', provisional: true };
+  const a = classifyForIndeed(input, taxonomy).classification;
+  assert.ok(a.confidence <= 0.65);
+  assert.deepEqual(classifyForIndeed({ ...input, query: 'Sales Engineer' }, taxonomy).classification, a);
+  assert.equal(classifyForIndeed({ title: 'Civil Engineer', taxonomy }).classification.label, 'Unclassified');
 });
-
-test('applies canonical data and leadership labels', () => {
-  assert.equal(label({ title: 'Data Architect', descriptionText: 'Design data warehouses and governance.' }), 'Out of scope');
-  assert.equal(label({ title: 'Data & AI Architect', descriptionText: 'Lead AI architecture; data modelling is secondary.' }), 'Data-domain stretch');
-  assert.equal(label({
-    title: 'Engineering Manager, AI Platform',
-    descriptionText: 'Own technical direction and architecture standards for 10 engineers across 2 teams.',
-  }), 'Leadership progression');
-  assert.equal(label({
-    title: 'Engineering Manager, AI Platform',
-    descriptionText: 'Manage five engineers and delivery ceremonies for an AI product.',
-  }), 'Out of scope');
+test('accepted leadership does not depend on software responsibilities', () => {
+  assert.equal(classifyForIndeed({ title: 'Project Manager', descriptionText: 'Coordinate construction contractors.' }, taxonomy).classification.label, 'Leadership progression');
 });

@@ -11,7 +11,7 @@ import { Database } from '../../job-hunter/scripts/workspace-dependencies.mjs';
  * Usage:
  *   node ../../linkedin-job-search/scripts/batch-fetch-jds.mjs \
  *     --db $PWD/jobhunter.sqlite \
- *     --speaks "English,Italian" \
+ *     --speaks "English,Dutch" \
  *     --exclude-languages "German,French" \
  *     --batch-size 5 --timeout 25
  *
@@ -27,6 +27,8 @@ import { fileURLToPath } from 'node:url';
 import { startCdpKeepAlive } from './cdp-keepalive.mjs';
 import { classifyLinkedInPage, researchNavigationDecision } from './linkedin-page-state.mjs';
 import { readLinkedInAccess, pauseLinkedInAccess } from '../../job-hunter/scripts/linkedin-access.mjs';
+import { loadProfile, ProfileError, titleExcluded } from '../../job-hunter/scripts/jh-profile.mjs';
+import { loadDataFile } from '../../job-hunter/scripts/jh-profile-extract.mjs';
 
 const JOBHUNTER_HOME = process.env.JOBHUNTER_HOME || path.join(process.env.HOME || process.cwd(), '.job-hunter');
 const DEFAULT_DB = process.env.JOBHUNTER_DB || path.join(JOBHUNTER_HOME, 'jobhunter.sqlite');
@@ -47,8 +49,8 @@ Purpose:
 Options:
   --db <path>                   SQLite DB (default ${DEFAULT_DB})
   --source <source>             job source to process (default linkedin)
-  --speaks <langs>              comma-separated languages user speaks (default English,Italian)
-  --exclude-languages <langs>   comma-separated required languages that block (default German,French)
+  --speaks <langs>              comma-separated languages user speaks (default: profile languages)
+  --exclude-languages <langs>   comma-separated required languages that block (default: profile exclusions only)
   --batch-size <n>              concurrent detail fetches per batch (default 2)
   --limit <n>                   process at most n jobs
   --timeout <seconds>           browser per-page timeout (default 25)
@@ -86,8 +88,8 @@ function parseArgs(argv) {
   const opts = {
     db: DEFAULT_DB,
     source: 'linkedin',
-    speaks: ['English', 'Italian'],
-    excludeLanguages: ['German', 'French'],
+    speaks: null,
+    excludeLanguages: [],
     batchSize: 2,
     limit: null,
     timeout: 25,
@@ -143,11 +145,20 @@ function parseArgs(argv) {
     }
   }
 
-  if (!opts.speaks.length) {
-    console.error('At least one spoken language is required via --speaks.');
-    process.exit(2);
-  }
   return opts;
+}
+
+function resolveBackfillDefaults(opts, profile) {
+  const resolved = { ...opts };
+  resolved.excludeLanguages = [...new Set([...(opts.excludeLanguages || []), ...(profile?.excludeLanguages || [])])];
+  if (!resolved.speaks?.length) {
+    resolved.speaks = profile?.speaks?.length ? [...profile.speaks] : [];
+  }
+  if (!resolved.speaks.length) {
+    throw new ProfileError('LANGUAGES_MISSING', 'Confirm languages and save them in personal-info-cache.json, or pass --speaks');
+  }
+  resolved.profile = profile || null;
+  return resolved;
 }
 
 function shQuiet(cmd, args, options = {}) {
@@ -568,15 +579,8 @@ function sentenceSplit(text) {
     .filter(Boolean);
 }
 
-const LANGUAGE_MAP = {
-  English: ['English', 'Englisch', 'anglais', 'inglese'],
-  Italian: ['Italian', 'Italienisch', 'italien', 'italiano'],
-  German: ['German', 'Deutsch', 'Allemand', 'Tedesco', 'Deutschkenntnisse'],
-  French: ['French', 'Français', 'Francais', 'Französisch', 'Franzoesisch', 'francese'],
-  Spanish: ['Spanish', 'Spanisch', 'Espagnol', 'Spagnolo'],
-  Dutch: ['Dutch', 'Niederländisch', 'Nederlands'],
-  Portuguese: ['Portuguese', 'Portugiesisch', 'Portugais'],
-};
+const LANGUAGE_MAP = Object.fromEntries(Object.entries(loadDataFile('language-aliases.json').languages)
+  .map(([language, aliases]) => [language, [language, ...aliases]]));
 
 const NICE_CONTEXT = /\b(nice[- ]to[- ]have|plus|bonus|preferred|advantage|asset|optional|beneficial|would be a plus|good to have|desirable)\b/i;
 const REQUIRED_CONTEXT = /\b(required|must|mandatory|essential|fluent|fluency|proficient|excellent|strong|native|business fluent|c1|c2|kenntnisse|maîtrise|maitrise|obligatoire|nécessaire|necessaire|erforderlich|voraussetzung|zwingend)\b/i;
@@ -624,18 +628,15 @@ function checkLanguageFilter(requirements, opts) {
     return { pass: false, reason: `FAIL: JD requires ${blocked.join(', ')} (user does not speak it/them)` };
   }
   if (missing.length) {
-    return { pass: false, reason: `FAIL: JD requires ${missing.join(', ')} (not in user spoken languages)` };
+    return { pass: true, unknown: missing, reason: `UNKNOWN: Confirm proficiency in ${missing.join(', ')}` };
   }
   return { pass: true, reason: `PASS: JD requires ${requirements.required.join(', ')} (user speaks all)` };
 }
 
-const BLOCKED_TITLE_RE = /\b(architekt(?:in)?|architecte|architetto|projektleiter(?:in)?|zeichner(?:in)?|bauleiter(?:in)?|innenarchitekt|architecte d.intérieur|architetto d.interni|praktikant(?:in)?)\b/i;
-const AI_SOFTWARE_RE = /\b(ai|a\.i\.|artificial intelligence|genai|generative ai|llm|machine learning|ml\b|data\s*&\s*ai|data and ai|ai\s*&\s*data|solution architect|solutions architect|enterprise architect|software architect|cloud architect)\b/i;
-
-function checkTitle(title) {
-  const text = String(title || '');
-  if (BLOCKED_TITLE_RE.test(text) && !AI_SOFTWARE_RE.test(text)) {
-    return { pass: false, reason: `FAIL: Title appears to be a non-IT/building architect role (${text})` };
+function checkTitle(title, profile = null) {
+  if (profile) {
+    const result = titleExcluded(profile, title);
+    if (result.excluded) return { pass: false, reason: `FAIL: Title excluded by profile family ${result.family}: ${result.reason}` };
   }
   return { pass: true, reason: null };
 }
@@ -731,7 +732,7 @@ async function processJob(job, opts, transport, control, rateLimit, admitUrl) {
     };
   }
 
-  const titleCheck = checkTitle(job.title);
+  const titleCheck = checkTitle(job.title, opts.profile);
   if (!titleCheck.pass) {
     return {
       job,
@@ -756,7 +757,7 @@ async function processJob(job, opts, transport, control, rateLimit, admitUrl) {
 }
 
 async function main() {
-  const opts = parseArgs(process.argv.slice(2));
+  let opts = parseArgs(process.argv.slice(2));
   // Persisted LinkedIn access gate: before any output, browser probe or CDP
   // contact. A paused, missing or unreadable state stops the backfill.
   const access = readLinkedInAccess(opts.db);
@@ -764,6 +765,16 @@ async function main() {
     const code = access.ok ? 'SOURCE_PAUSED' : 'ACCESS_STATE_UNAVAILABLE';
     const reason = access.ok ? 'LinkedIn research is paused' : 'LinkedIn access state is unavailable';
     console.log(JSON.stringify({ ok: false, blocked: true, code, reason }));
+    process.exitCode = 2;
+    return;
+  }
+  try {
+    const profile = loadProfile({ home: JOBHUNTER_HOME, requireConfirmed: true });
+    opts = resolveBackfillDefaults(opts, profile);
+    if (profile.provenance.refreshed) console.error(`[profile] derived profile refreshed from ${path.basename(profile.provenance.cvPath)}`);
+  } catch (error) {
+    if (!(error instanceof ProfileError)) throw error;
+    console.error(`${error.code}: ${error.message}`);
     process.exitCode = 2;
     return;
   }
