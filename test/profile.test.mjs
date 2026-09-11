@@ -119,7 +119,7 @@ test('confirmation is bound to CV, preferences and search configuration in both 
     confirmed = confirmProfile({ ...options, expectedProfileSha256: updated.confirmation.profileSha256 });
     assert.notEqual(confirmed.provenance.profileSha256, oldHash);
   }
-  const twin = spawnSync('python3', ['-c', `import sys,json; sys.path.insert(0,${JSON.stringify(path.dirname(pythonTwin))}); import jh_profile; print(json.dumps(jh_profile.load_profile(home=${JSON.stringify(dir)}, require_confirmed=True)['provenance']))`], { encoding: 'utf8' });
+  const twin = spawnSync('python3', ['-c', `import sys,json; sys.path.insert(0,${JSON.stringify(path.dirname(pythonTwin))}); import jh_profile; print(json.dumps(jh_profile.load_profile(home=${JSON.stringify(dir)}, require_confirmed=True)['provenance']))`], { encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
   assert.equal(twin.status, 0, twin.stderr);
   assert.equal(JSON.parse(twin.stdout).profileSha256, confirmed.provenance.profileSha256);
 });

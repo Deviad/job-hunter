@@ -1,6 +1,8 @@
 """Read DOCX text using the standard ZIP and XML parsers, without extraction to disk."""
 import io
 import sys
+sys.dont_write_bytecode = True  # never leave __pycache__ inside the published skill tree
+import sys
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree

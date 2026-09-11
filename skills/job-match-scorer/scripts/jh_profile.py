@@ -1,5 +1,7 @@
 """Python adapter to the authoritative JS profile loader and refresh contract."""
 from __future__ import annotations
+import sys
+sys.dont_write_bytecode = True  # never leave __pycache__ inside the published skill tree
 import json
 import os
 import subprocess

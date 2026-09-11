@@ -65,6 +65,7 @@ import os
 import re
 import subprocess
 import sys
+sys.dont_write_bytecode = True  # importing jh_profile must not leave __pycache__ in the skill tree
 import zipfile
 from pathlib import Path
 

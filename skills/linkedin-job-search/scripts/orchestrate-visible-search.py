@@ -16,6 +16,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+sys.dont_write_bytecode = True  # importing jh_profile must not leave __pycache__ in the skill tree
 import time
 from datetime import datetime, timezone
 from pathlib import Path
