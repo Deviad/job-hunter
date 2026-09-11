@@ -127,6 +127,21 @@ LinkedIn and Indeed sessions must be provided by the user.
 // --- check-doc-commands tests ---
 
 describe('check-doc-commands', () => {
+  it('resolves complete namespaced npm script names', async () => {
+    const dir = await fresh();
+    await writeFile(join(dir, 'README.md'), '`npm run verify:research-baseline`');
+    await writeFile(join(dir, 'package.json'), JSON.stringify({ scripts: {
+      'verify:research-baseline': 'node --test scripts/check-research-baseline.mjs',
+    } }));
+    assert.equal((await checkDocCommands(dir)).exitCode, 0);
+
+    await writeFile(join(dir, 'README.md'), '`npm run verify:missing`');
+    await writeFile(join(dir, 'package.json'), JSON.stringify({ scripts: { verify: 'node --test' } }));
+    const result = await checkDocCommands(dir);
+    assert.equal(result.exitCode, 1);
+    assert.ok(result.findings.some(f => f.path === 'package.json#scripts.verify:missing'));
+  });
+
   it('passes when all referenced scripts exist', async () => {
     const dir = await fresh();
     await writeFile(join(dir, 'README.md'), VALID_README);

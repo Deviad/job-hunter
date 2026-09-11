@@ -1,25 +1,39 @@
 #!/usr/bin/env python3
-"""Inline scoring template for unscored jobs.
+"""Inline scoring template for unscored jobs. Use when the unscored queue exceeds
+~15 jobs (a leaf subagent times out around 40+ jobs on a 600s leaf budget).
 
-Use this when the unscored queue exceeds 15 jobs (a leaf subagent times out
-around 40+ jobs at the 600s leaf budget). The script reads the CV, the
-unscored jobs JSON, and the personal-info cache, then emits a JSON array of
-score objects in the exact match_results INSERT format.
+The script builds ONE evidence bundle per pass (parsed CV text, resolved personal
+cache, taxonomy, scorer version) and scores every job against that bundle. It never
+assumes that a candidate holds a skill, language, or work authorization: a
+requirement counts as matched only when a literal span of the parsed CV or an
+explicit cache field supports it. Recognition vocabulary recognizes requirement
+terms in a job description; it is never possession evidence.
+
+Scoring: fit_score = matched mandatory criteria / total mandatory criteria * 100,
+computed from actual criterion records. Preferred ("nice to have") items never enter
+the mandatory denominator. A job with no assessable mandatory criteria is reported as
+insufficient evidence (fit_score 0, cta Skip, stretch_label Blocked, zero counts, and
+an `assessment_status: insufficient_evidence` marker in the evidence JSON), never as
+a fabricated 100%.
 
 Inputs (paths can be overridden via env vars):
   $SCORE_CV_PATH         default: $PWD/CV.docx
   $SCORE_JOBS_PATH       default: /tmp/jobs-to-score.json
   $SCORE_OUTPUT_PATH     default: /tmp/scores.json
-  $SCORE_CACHE_PATH      default: $PWD/personal-info-cache.json
-  $SCORE_REQUIRE_TITLE   default: "0" — retained for CLI compatibility; when
-                         "1", add an adjacent-title tailoring note but never
-                         veto a score-driven Apply decision.
-  $SCORE_TARGET_ROLE     default: first few preferred roles from rolePreferences,
-                         or "" when the cache has no rolePreferences (also used in
-                         the deterministic search ID)
+  $SCORE_CACHE_PATH      explicit personal-cache override. When set, only this file is
+                         used; if missing or unparseable, cache evidence stays unknown
+                         (no silent fallback). When unset, resolution order is
+                         $JOBHUNTER_HOME/personal-info-cache.json, then
+                         $PWD/personal-info-cache.json.
+  $SCORE_REQUIRE_TITLE   default: "0" — retained CLI compatibility; "1" adds an
+                         adjacent-title tailoring note but never vetoes a
+                         score-driven Apply decision.
+  $SCORE_TARGET_ROLE     default: first few preferred roles from rolePreferences, or
+                         "" when the cache has none (also used in the search ID).
   $SCORE_SEARCH_ID       optional explicit override. Without it, the script derives
                          one stable ID from the target role, country scope, CV bytes,
-                         scoring version, and canonical job payload.
+                         resolved cache bytes, taxonomy identity, scorer version, and
+                         canonical job payload (description-precedence text).
 
 Usage:
   python3 score_jobs_inline.py
@@ -35,8 +49,13 @@ import sys
 import zipfile
 from pathlib import Path
 
-# --- CV skill inventory (from SKILL.md "For each mandatory requirement") ---
-CV_SKILLS = {
+SCORER_VERSION = "inline-v3"
+
+# Requirement-recognition vocabulary only (transcribed from the former
+# CV_SKILLS/NON_CV_SKILLS inventories). Membership here means "this phrase names a
+# requirement in a job description". It carries NO claim that the candidate holds the
+# thing; possession evidence must come from the parsed CV or an explicit cache field.
+REQUIREMENT_VOCAB = frozenset({
     "aws", "azure", "cosmos db", "cosmosdb", "blob storage", "azure ai search",
     "azure web service", "azure functions", "entra id", "microsoft entra",
     "langgraph", "langchain", "rag", "retrieval-augmented generation",
@@ -56,9 +75,6 @@ CV_SKILLS = {
     "ai architect", "solution architect", "cloud architect", "enterprise architect",
     "integration architect", "technical architect", "software architect",
     "platform architect", "ai engineer", "llm",
-}
-
-NON_CV_SKILLS = {
     "databricks", "pyspark", "spark", "mlflow", "terraform", "pulumi",
     "salesforce", "servicenow", "mulesoft", "sap", "oracle database",
     "snowflake", "airflow", "hadoop", "react", "angular", "node.js", "nodejs",
@@ -74,7 +90,7 @@ NON_CV_SKILLS = {
     "selenium", "cypress", "playwright", "jest", "mocha", "junit",
     "testng", "cucumber", "jmeter", "loadrunner", "soapui",
     "rest-assured", "pytest",
-}
+})
 
 MANDATORY_MARKERS = re.compile(
     r"\b(required|must have|essential|strong background in|strong experience with|"
@@ -115,20 +131,68 @@ LANG_PATTERNS = {
     "English": re.compile(r"\b(english|fluent in english)\b", re.IGNORECASE),
     "Italian": re.compile(r"\b(italian|italiano|fluent in italian)\b", re.IGNORECASE),
 }
-USER_SPOKEN = {"English", "Italian"}
+# Work-authorization wording is recognized as a requirement but never resolved from
+# title, employer, nationality, or residence. Only explicit cache values can match it.
+AUTHORISATION_RE = re.compile(
+    r"\b(work (authorization|authorisation|permit|visa)|visa sponsorship|"
+    r"sponsorship (is )?(not )?(available|required|provided)|no sponsorship|"
+    r"without (any )?sponsorship|citizen(n|ship)? (only|required)|"
+    r"must (be|hold|be a|already hold)\b[^.;]{0,60}?(citizen|citizenship|work "
+    r"authorization|clearance)|security clearance (required|mandatory)|"
+    r"eligible to work\b|require[sd]? (a )?work (authorization|permit|visa))\b",
+    re.IGNORECASE,
+)
+AUTHORISATION_NEGATIVE_RE = re.compile(
+    r"\b(no sponsorship (available|provided|offer(ed|ing))?|"
+    r"without (any )?sponsorship|sponsorship is not available|"
+    r"you (must|already) (be|hold|are))\b",
+    re.IGNORECASE,
+)
 CLASSIFIER_CLI = Path(__file__).resolve().parents[2] / "job-hunter" / "scripts" / "role-classifier-cli.mjs"
 
 
-def load_role_preferences() -> dict | None:
-    """Load the optional machine-readable role taxonomy from the canonical cache."""
+def resolve_cache_path(explicit: str | None = None) -> str | None:
+    """Resolve the personal-cache path: explicit override, canonical workspace, then cwd.
+
+    An explicit $SCORE_CACHE_PATH that is missing is NOT replaced by the fallbacks;
+    cache evidence stays unknown instead of silently switching identity.
+    """
+    if explicit:
+        return explicit if Path(explicit).is_file() else None
     home = Path(os.environ.get("JOBHUNTER_HOME") or (Path.home() / ".job-hunter")).expanduser()
-    try:
-        with (home / "personal-info-cache.json").open(encoding="utf-8") as handle:
-            cache = json.load(handle)
-        preferences = cache.get("rolePreferences")
-        return preferences if isinstance(preferences, dict) else None
-    except (OSError, TypeError, ValueError):
+    canonical = home / "personal-info-cache.json"
+    if canonical.is_file():
+        return str(canonical)
+    cwd_cache = Path.cwd() / "personal-info-cache.json"
+    return str(cwd_cache) if cwd_cache.is_file() else None
+
+
+def load_cache(path: str | None) -> dict | None:
+    if not path:
         return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = handle.read()
+        cache = json.loads(data)
+        return cache if isinstance(cache, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _cache_sha(path: str | None) -> str | None:
+    if not path:
+        return None
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def load_role_preferences() -> dict | None:
+    """Load machine-readable role taxonomy from the default-resolved cache."""
+    cache = load_cache(resolve_cache_path())
+    preferences = cache.get("rolePreferences") if cache else None
+    return preferences if isinstance(preferences, dict) else None
 
 
 def _role_titles(preferences: dict | None) -> list[str]:
@@ -159,6 +223,106 @@ def build_title_match(preferences: dict | None) -> re.Pattern[str]:
         if words:
             patterns.append(r"\b" + r"[\s\-\u2013\u2014/,]+".join(re.escape(word) for word in words) + r"\b")
     return re.compile("(?:" + "|".join(patterns) + ")", re.IGNORECASE) if patterns else FALLBACK_TITLE_MATCH
+
+
+def cache_supported_languages(cache: dict | None) -> set[str]:
+    """Explicit language evidence from the cache, never inferred from residence.
+
+    Accepts ["English", ...], {"German": "fluent", ...} or [{"language": ...,
+    "level": ...}]. An empty/absent field yields the empty set (everything unknown).
+    """
+    if not cache:
+        return set()
+    raw = cache.get("languages")
+    found: set[str] = set()
+
+    def add(value: str, level: str | None = None):
+        name = value.strip().title()
+        if not name:
+            return
+        if level is None or str(level).strip().lower() not in {"none", "basic", "a1", "elementary"}:
+            found.add(name)
+
+    if isinstance(raw, dict):
+        for name, level in raw.items():
+            add(str(name), str(level) if level is not None else None)
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, str):
+                add(item)
+            elif isinstance(item, dict):
+                name = item.get("language") or item.get("name")
+                if isinstance(name, str):
+                    add(name, item.get("level") or item.get("proficiency"))
+    return found
+
+
+def cache_skill_evidence(cache: dict | None) -> set[str]:
+    raw = cache.get("skills") if isinstance(cache, dict) else None
+    items: set[str] = set()
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, str) and item.strip():
+                items.add(item.strip().lower())
+    return items
+
+
+def cache_authorisation(cache: dict | None, country: str | None) -> str | None:
+    """Return 'yes'/'no'/None — only from explicit cache values for the job country."""
+    if not cache or not country:
+        return None
+    raw = cache.get("workAuthorization") or cache.get("work_authorization")
+    key = country.strip().upper()
+    value = None
+    if isinstance(raw, dict):
+        for name, entry in raw.items():
+            if str(name).strip().upper() == key:
+                value = entry
+                break
+    elif isinstance(raw, list):
+        return "yes" if any(str(item).strip().upper() == key for item in raw) else None
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"yes", "true", "required", "granted", "have", "holder"}:
+            return "yes"
+        if lowered in {"no", "false", "none", "not held", "no permit"}:
+            return "no"
+    return None
+
+
+def build_evidence(cv_path: str | None = None, cache_path: str | None = None) -> dict:
+    """Collect one evidence bundle for a scoring pass (CV parsed once)."""
+    cv_text = ""
+    cv_sha = None
+    if cv_path and Path(cv_path).is_file():
+        cv_text = extract_cv_text(cv_path)
+        cv_sha = _cache_sha(cv_path)
+    cache = load_cache(cache_path)
+    preferences = cache.get("rolePreferences") if isinstance(cache, dict) else None
+    preferences = preferences if isinstance(preferences, dict) else None
+    titles = _role_titles(preferences)
+    taxonomy_sha = hashlib.sha256(
+        json.dumps(sorted(t.lower() for t in titles), ensure_ascii=False).encode()
+    ).hexdigest()[:12]
+    return {
+        "scorer_version": SCORER_VERSION,
+        "cv": {"path": cv_path, "sha256": cv_sha, "text": cv_text},
+        "cache": {
+            "path": cache_path,
+            "sha256": _cache_sha(cache_path),
+            "data": cache or {},
+            "languages": cache_supported_languages(cache),
+            "skills": cache_skill_evidence(cache),
+        },
+        "taxonomy": {
+            "source": "cache" if titles else "fallback",
+            "titles": titles,
+            "sha256": taxonomy_sha,
+        },
+        "title_match": build_title_match(preferences) if titles else FALLBACK_TITLE_MATCH,
+    }
 
 
 ROLE_PREFERENCES = load_role_preferences()
@@ -225,66 +389,162 @@ def extract_cv_text(path: str) -> str:
     return html.unescape(data)
 
 
-def extract_mandatory_skills(desc: str) -> list[str]:
+def _sentences(desc: str) -> list[str]:
+    return [s.strip() for s in re.split(r"(?<=[.!?;])\s+|\n", desc) if s.strip()]
+
+
+def find_cv_span(term: str, cv_text: str) -> str | None:
+    """Literal, word-bounded CV span for a requirement term (possession evidence)."""
+    if not cv_text:
+        return None
+    match = re.search(r"\b" + re.escape(term) + r"\b", cv_text, re.IGNORECASE)
+    if not match:
+        return None
+    start = max(match.start() - 20, 0)
+    snippet = re.sub(r"\s+", " ", cv_text[start:match.end() + 20]).strip()
+    return f"cv-span:{match.start()}:{snippet[:60]}"
+
+
+def cv_language_support(language: str, cv_text: str) -> str | None:
+    """A CV line naming the language with proficiency wording, else None."""
+    if not cv_text:
+        return None
+    pattern = LANG_PATTERNS.get(language)
+    if not pattern:
+        return None
+    proficiency = re.compile(
+        r"\b(basic|intermediate|upper|advanced|fluent|fluency|proficient|proficiency|"
+        r"native|professional working|working knowledge|b1|b2|c[12]|spoken)\b",
+        re.IGNORECASE,
+    )
+    for line in cv_text.splitlines():
+        if pattern.search(line) and proficiency.search(line):
+            snippet = re.sub(r"\s+", " ", line).strip()
+            return f"cv-span:line:{snippet[:60]}"
+    return None
+
+
+def extract_mandatory_criteria(desc: str, job: dict) -> list[dict]:
+    """Extract assessable mandatory criterion records with exact JD quotes.
+
+    Preferred sentences never become mandatory criteria. Language and
+    work-authorization wording becomes a criterion only when it appears in a
+    mandatory-flagged sentence or is itself explicit requirement language.
+    """
     if not desc:
         return []
-    skills: list[str] = []
-    for sent in re.split(r"(?<=[.!?;])\s+|\n", desc):
-        if not sent.strip():
+    criteria: list[dict] = []
+    seen: set[tuple] = set()
+
+    def add(criterion: dict):
+        key = (criterion["kind"], criterion.get("language"), tuple(sorted(criterion.get("terms", []))))
+        if key not in seen and len(criteria) < 12:
+            seen.add(key)
+            criteria.append(criterion)
+
+    for index, sent in enumerate(_sentences(desc)):
+        if NICE_TO_HAVE_MARKERS.search(sent):
             continue
-        has_mandatory = bool(MANDATORY_MARKERS.search(sent))
-        if not has_mandatory:
+        mandatory = bool(MANDATORY_MARKERS.search(sent))
+        quote = sent[:400]
+        if mandatory:
+            sent_lower = sent.lower()
+            terms: set[str] = set()
+            for term in REQUIREMENT_VOCAB:
+                if re.search(r"\b" + re.escape(term) + r"\b", sent_lower):
+                    terms.add(term)
+            for pattern in (
+                r"experience (?:with|in)\s+([a-zA-Z][\w\s./+#-]{1,40}?)(?=[,;.]|\sand\s|\sor\s|$)",
+                r"knowledge of\s+([a-zA-Z][\w\s./+#-]{1,40}?)(?=[,;.]|\sand\s|\sor\s|$)",
+            ):
+                for match in re.finditer(pattern, sent, re.IGNORECASE):
+                    token = match.group(1).strip().lower()
+                    if 2 < len(token) < 50:
+                        terms.add(token)
+            if terms:
+                add({
+                    "id": f"c{index}-{len(criteria)}",
+                    "kind": "skill",
+                    "terms": sorted(terms),
+                    "requirement": quote,
+                })
+        for language, pattern in LANG_PATTERNS.items():
+            mandatory_language = (
+                pattern.search(sent)
+                and (mandatory or re.search(r"\b(fluent|fluency|proficient|proficiency|mandatory|required)\b", sent, re.IGNORECASE))
+                and not re.search(r"\b(non[- ]native|not (fluent|required)|nice)\b", sent, re.IGNORECASE)
+            )
+            if mandatory_language:
+                add({"id": f"c{index}-{len(criteria)}", "kind": "language", "language": language, "requirement": quote})
+        if AUTHORISATION_RE.search(sent) and (
+            mandatory
+            or AUTHORISATION_NEGATIVE_RE.search(sent)
+            or re.search(r"\b(candidates? (without|from)|applicants? (without|from))\b", sent, re.IGNORECASE)
+        ):
+            add({
+                "id": f"c{index}-{len(criteria)}",
+                "kind": "authorization",
+                "requirement": quote,
+                "country": job.get("country_code") or job.get("countryCode"),
+                "no_sponsorship": bool(AUTHORISATION_NEGATIVE_RE.search(sent)),
+            })
+    return criteria
+
+
+def extract_preferred_items(desc: str) -> list[str]:
+    """Preferred/nice-to-have items (display + `nice_to_have` counts only)."""
+    if not desc:
+        return []
+    items: list[str] = []
+    for sent in _sentences(desc):
+        if not NICE_TO_HAVE_MARKERS.search(sent):
             continue
         sent_lower = sent.lower()
-        candidates: set[str] = set()
-        for skill in CV_SKILLS | NON_CV_SKILLS:
-            if re.search(r"\b" + re.escape(skill) + r"\b", sent_lower):
-                candidates.add(skill)
-        for m in re.finditer(
-            r"experience (?:with|in)\s+([a-zA-Z][\w\s./+#-]{1,40}?)(?=[,;.]|\sand\s|\sor\s|$)",
-            sent, re.IGNORECASE,
-        ):
-            tok = m.group(1).strip().lower()
-            if 2 < len(tok) < 50:
-                candidates.add(tok)
-        for m in re.finditer(
-            r"knowledge of\s+([a-zA-Z][\w\s./+#-]{1,40}?)(?=[,;.]|\sand\s|\sor\s|$)",
-            sent, re.IGNORECASE,
-        ):
-            tok = m.group(1).strip().lower()
-            if 2 < len(tok) < 50:
-                candidates.add(tok)
-        for c in candidates:
-            if c not in skills:
-                skills.append(c)
-    return skills
+        for term in REQUIREMENT_VOCAB:
+            if re.search(r"\b" + re.escape(term) + r"\b", sent_lower):
+                if term not in items:
+                    items.append(term)
+    return items[:8]
 
 
-def check_cv_has_skill(skill: str) -> bool:
-    s = skill.lower().strip()
-    if s in CV_SKILLS:
-        return True
-    for cv_skill in CV_SKILLS:
-        if s in cv_skill or cv_skill in s:
-            return True
-    return False
+def evaluate_criterion(criterion: dict, evidence: dict) -> tuple[str, str | None]:
+    """Return ('matched', ref) only with explicit CV/cache evidence; else unknown."""
+    kind = criterion["kind"]
+    cache = evidence.get("cache", {})
+    cv_text = evidence.get("cv", {}).get("text", "")
+    if kind == "skill":
+        for term in criterion.get("terms", []):
+            span = find_cv_span(term, cv_text)
+            if span:
+                return "matched", f"{span} (cv sha {evidence['cv'].get('sha256', 'none')[:12]})"
+            if term in cache.get("skills", set()):
+                return "matched", f"cache:skills:{term}"
+        return "unknown", None
+    if kind == "language":
+        language = criterion["language"]
+        if language in cache.get("languages", set()):
+            return "matched", f"cache:languages:{language}"
+        span = cv_language_support(language, cv_text)
+        if span:
+            return "matched", f"{span} (cv sha {evidence['cv'].get('sha256', 'none')[:12]})"
+        return "unknown", None
+    if kind == "authorization":
+        value = cache_authorisation(cache.get("data"), criterion.get("country"))
+        if value == "yes" and not criterion.get("no_sponsorship"):
+            return "matched", f"cache:workAuthorization:{criterion.get('country')}=yes"
+        return "unknown", None
+    return "unknown", None
 
 
-def detect_language_blocker(desc: str) -> bool:
-    if not desc:
-        return False
-    for lang, pattern in LANG_PATTERNS.items():
-        if lang in USER_SPOKEN:
-            continue
-        if not pattern.search(desc):
-            continue
-        for sent in re.split(r"(?<=[.!?;])\s+|\n", desc):
-            if pattern.search(sent):
-                if MANDATORY_MARKERS.search(sent) and not NICE_TO_HAVE_MARKERS.search(sent):
-                    return True
-                if re.search(r"\b(must|required|essential|fluent|proficient|mandatory).*" +
-                             pattern.pattern, sent, re.IGNORECASE):
-                    return True
+def criterion_is_blocker(criterion: dict, evidence: dict) -> bool:
+    """A mandatory requirement that explicit evidence contradicts, or a mandatory
+    language the evidence base cannot support. Only called for unresolved criteria.
+    Unknown authorization never blocks; unknown language keeps the frozen safety rule."""
+    if criterion["kind"] == "language":
+        return True  # unresolved mandatory language keeps the frozen safety behavior
+    if criterion["kind"] == "authorization" and criterion.get("no_sponsorship"):
+        value = cache_authorisation(evidence.get("cache", {}).get("data"), criterion.get("country"))
+        return value == "no"
     return False
 
 
@@ -359,6 +619,7 @@ def score_job(
     require_title_match: bool = False,
     search_id: str | None = None,
     role_classification: dict | None = None,
+    evidence: dict | None = None,
 ) -> dict:
     title = (job.get("title") or "").strip()
     desc = job_description(job)
@@ -370,91 +631,85 @@ def score_job(
     # scorer output can flow through the existing jobs-field integration path.
     role_reason_json = json.dumps(classification.get("reason") or {}, sort_keys=True)
 
-    title_match = bool(TITLE_MATCH.search(title))
-    domain_match = bool(re.search(
-        r"\b(banking|fintech|finance|financial services|insurance|"
-        r"investment|asset management|wealth|trading|"
-        r"cloud|azure|aws|microservices|saas|enterprise|"
-        r"architect|architecture)\b", desc, re.IGNORECASE,
-    )) or title_match
+    evidence = evidence or build_evidence()
+    title_matcher = evidence.get("title_match") or TITLE_MATCH
+    title_match = bool(title_matcher.search(title))
 
-    mandatory_skills = extract_mandatory_skills(desc)
-    mandatory_matched = [s for s in mandatory_skills if check_cv_has_skill(s)]
-    tech_total = len(mandatory_skills)
-    tech_matched = len(mandatory_matched)
-    tech_ratio = tech_matched / tech_total if tech_total else 1.0
-    tech_stack_pass = (tech_total == 0) or (tech_ratio >= 0.5)
-    if tech_total >= 3 and tech_ratio < 0.3:
-        tech_stack_pass = False
-
-    seniority_match = bool(re.search(
-        r"\b(architect|principal|lead|head|director|chief|senior|staff)\b",
-        title, re.IGNORECASE,
-    )) or title_match
-    language_pass = not detect_language_blocker(desc)
-
+    criteria = extract_mandatory_criteria(desc, job)
     blockers: list[str] = []
-    if not language_pass:
-        blockers.append("Language blocker (German/French/Spanish required)")
+    for criterion in criteria:
+        status, ref = evaluate_criterion(criterion, evidence)
+        criterion["status"] = status
+        if status == "matched" and ref:
+            criterion["evidence"] = ref
+        if status == "unknown" and criterion_is_blocker(criterion, evidence):
+            if criterion["kind"] == "language":
+                blockers.append(f"Language blocker ({criterion['language']} required without supporting CV/cache evidence)")
+            else:
+                blockers.append(
+                    f"Work-authorization conflict: {criterion['requirement'][:120]} "
+                    f"(cache workAuthorization for {criterion.get('country')} = no)"
+                )
+    total = len(criteria)
+    matched = [c for c in criteria if c["status"] == "matched"]
+    unknown = [c for c in criteria if c["status"] == "unknown"]
+    skill_criteria = [c for c in criteria if c["kind"] == "skill"]
+
     if BUILDING_ARCH_TITLE.search(title):
         blockers.append("Role mismatch (building/construction architect)")
 
-    must_have_matched = sum([
-        1 if title_match else 0,
-        1 if domain_match else 0,
-        1 if tech_stack_pass else 0,
-        1 if seniority_match else 0,
-        1 if language_pass else 0,
-    ])
-    fit_score = (must_have_matched / 5) * 100.0
+    if total == 0:
+        fit_score = 0.0
+        assessment_status = "insufficient_evidence"
+    else:
+        fit_score = round(len(matched) / total * 100.0, 1)
+        assessment_status = "assessed"
+    ratio = len(matched) / total if total else 0.0
+    language_blockers = [b for b in blockers if b.startswith("Language blocker")]
 
     if role_label == "Out of scope":
         blockers.append(f"Role family blocker (Out of scope): {role_reason}")
     has_blocker = bool(blockers)
     # The application threshold is score-driven. Adjacent titles are tailoring
     # signals only; they do not veto a score of 60 or higher.
-    cta = "Apply" if (fit_score >= 60 and not has_blocker) else "Skip"
+    cta = "Apply" if (assessment_status == "assessed" and fit_score >= 60 and not has_blocker) else "Skip"
 
     # Stretch label — DB CHECK values only (see SKILL.md)
-    if has_blocker:
+    if has_blocker or assessment_status != "assessed":
         stretch = "Blocked"
-    elif must_have_matched == 5 and tech_ratio >= 0.8:
+    elif title_match and ratio >= 0.8:
         stretch = "Core fit"
-    elif must_have_matched >= 4 and not has_blocker:
+    elif title_match and ratio >= 0.5:
         stretch = "Stretch"
     elif not title_match:
         stretch = "Major domain stretch"
-    elif not tech_stack_pass and tech_total > 0:
-        stretch = "Major cloud stretch"
     else:
-        stretch = "Stretch"
+        stretch = "Major cloud stretch"
 
     tailoring: list[str] = []
     if require_title_match and not title_match:
         tailoring.append(f"Title '{title}' is adjacent to the target role tier — emphasize transferable architecture evidence")
-    if tech_total > 0 and tech_matched < tech_total:
-        missing = [s for s in mandatory_skills if s not in mandatory_matched]
-        tailoring.append(f"CV lacks {len(missing)} of {tech_total} mandatory skills: {', '.join(missing[:5])}")
-    tailoring_effort = (
-        "high" if (tech_total > 0 and tech_matched < tech_total * 0.5) else
-        "medium" if tech_matched < tech_total else "low"
-    )
+    if unknown:
+        summary = ", ".join(
+            (c.get("language") or c.get("kind") or "?") if c["kind"] != "skill"
+            else "/".join(c.get("terms", [])[:3])
+            for c in unknown[:5]
+        )
+        tailoring.append(f"CV lacks {len(unknown)} of {total} mandatory criteria (evidence unknown): {summary}")
+    if assessment_status == "assessed":
+        tailoring_effort = (
+            "high" if ratio < 0.5 else "medium" if len(matched) < total else "low"
+        )
+    else:
+        tailoring_effort = "high"
 
-    matched_must: list[str] = []
-    if title_match: matched_must.append("Title alignment")
-    if domain_match: matched_must.append("Domain overlap (banking/cloud/enterprise)")
-    if tech_stack_pass: matched_must.append(f"Tech stack: {tech_matched}/{tech_total} mandatory skills matched")
-    if seniority_match: matched_must.append("Seniority match")
-    if language_pass: matched_must.append("Language alignment")
-    missing_must: list[str] = []
-    if not title_match: missing_must.append(f"Title '{title}' not strictly AI/Solution/Cloud Architect")
-    if not tech_stack_pass:
-        if tech_total > 0:
-            missing_must.append(f"Tech stack: missing {', '.join([s for s in mandatory_skills if s not in mandatory_matched][:5])}")
-        else:
-            missing_must.append("Tech stack: no explicit mandatory skills listed")
-    if not seniority_match: missing_must.append("Seniority: title suggests IC/mid rather than architect/lead")
-    if not language_pass: missing_must.append("Language blocker")
+    matched_must = [
+        f"Requirement '{c['requirement'][:160]}' — {c['evidence']}" for c in matched
+    ]
+    missing_must = [
+        f"Requirement '{c['requirement'][:160]}' — evidence unknown (not counted as matched)"
+        for c in unknown
+    ]
 
     if role_label == "Data-domain stretch":
         data_gap = classification.get("dataGap") or {}
@@ -479,37 +734,54 @@ def score_job(
         _append_unique(missing_must, leadership_fact)
         _append_unique(tailoring, leadership_fact)
 
-    has_blocker = bool(blockers)
-    if has_blocker:
-        cta = "Skip"
+    preferred = extract_preferred_items(desc)
+    preferred_matched = [
+        item for item in preferred
+        if find_cv_span(item, evidence.get("cv", {}).get("text", ""))
+        or item in evidence.get("cache", {}).get("skills", set())
+    ]
+    provenance = {
+        "scorer_version": SCORER_VERSION,
+        "cv": {"path": evidence["cv"]["path"], "sha256": evidence["cv"]["sha256"]},
+        "cache": {"path": evidence["cache"]["path"], "sha256": evidence["cache"]["sha256"]},
+        "taxonomy": {"source": evidence["taxonomy"]["source"], "sha256": evidence["taxonomy"]["sha256"]},
+    }
 
     return {
         "search_id": search_id,
         "source": job.get("source"),
         "job_id": job.get("job_id"),
-        "fit_score": round(fit_score, 1),
+        "fit_score": fit_score,
+        "assessment_status": assessment_status,
+        "score_display": "insufficient_evidence (no assessable mandatory criteria)"
+        if assessment_status != "assessed" else f"{fit_score}%",
         "cta": cta,
         "stretch_label": stretch,
         "role_family_inferred": role_label,
         "role_family_confidence": classification.get("confidence"),
         "role_family_reason": role_reason_json,
-        "must_have_total": 5,
-        "must_have_matched": must_have_matched,
-        "tech_stack_total": tech_total,
-        "tech_stack_matched": tech_matched,
-        "mandatory_skills_found_json": json.dumps(mandatory_skills),
-        "mandatory_skills_matched_json": json.dumps(mandatory_matched),
-        "nice_to_have_total": 0,
-        "nice_to_have_matched": 0,
-        "has_language_blocker": 0 if language_pass else 1,
+        "must_have_total": total,
+        "must_have_matched": len(matched),
+        "tech_stack_total": len(skill_criteria),
+        "tech_stack_matched": sum(1 for c in skill_criteria if c["status"] == "matched"),
+        "mandatory_skills_found_json": json.dumps(criteria),
+        "mandatory_skills_matched_json": json.dumps(matched),
+        "nice_to_have_total": len(preferred),
+        "nice_to_have_matched": len(preferred_matched),
+        "has_language_blocker": 1 if language_blockers else 0,
         "has_country_mismatch": 0,
         "has_work_mode_mismatch": 0,
         "tailoring_effort": tailoring_effort,
         "matched_must_haves_json": json.dumps(matched_must),
-        "missing_or_unclear_must_haves_json": json.dumps(missing_must),
-        "matched_nice_to_haves_json": json.dumps([]),
+        "missing_or_unclear_must_haves_json": json.dumps(
+            [{"schemaVersion": 1, "assessment_status": "insufficient_evidence",
+              "reason": "no_assessable_mandatory_criteria"}] + missing_must
+            if assessment_status != "assessed" else missing_must
+        ),
+        "matched_nice_to_haves_json": json.dumps(preferred_matched),
         "tailoring_suggestions_json": json.dumps(tailoring),
         "blockers_json": json.dumps(blockers),
+        "evidence_provenance": provenance,
     }
 
 
@@ -518,7 +790,7 @@ def slug(value: str, fallback: str) -> str:
     return normalized[:32] or fallback
 
 
-def deterministic_search_id(jobs: list[dict], cv_path: str, require_title: bool) -> str:
+def deterministic_search_id(jobs: list[dict], evidence: dict, require_title: bool) -> str:
     explicit = os.environ.get("SCORE_SEARCH_ID")
     if explicit:
         return explicit
@@ -536,15 +808,17 @@ def deterministic_search_id(jobs: list[dict], cv_path: str, require_title: bool)
             "title": job.get("title"),
             "company": job.get("company"),
             "country_code": job.get("country_code") or job.get("countryCode"),
-            "description": job.get("description") or job.get("description_text"),
+            "description": job_description(job),
         } for job in jobs),
         key=lambda job: (str(job["source"] or ""), str(job["job_id"] or "")),
     )
     payload = {
-        "scorer_version": "inline-v2",
+        "scorer_version": SCORER_VERSION,
         "target_role": target_role,
         "require_title": require_title,
-        "cv_sha256": hashlib.sha256(Path(cv_path).read_bytes()).hexdigest(),
+        "cv_sha256": evidence["cv"].get("sha256") or "none",
+        "cache_sha256": evidence["cache"].get("sha256") or "none",
+        "taxonomy_sha256": evidence["taxonomy"].get("sha256"),
         "jobs": canonical_jobs,
     }
     digest = hashlib.sha256(
@@ -565,30 +839,48 @@ def main():
         sys.exit(f"CV not found: {cv_path}")
     if not Path(jobs_path).exists():
         sys.exit(f"Jobs JSON not found: {jobs_path}")
-    extract_cv_text(cv_path)  # sanity check parse
+
+    explicit_cache = os.environ.get("SCORE_CACHE_PATH")
+    if explicit_cache and not Path(explicit_cache).is_file():
+        print(
+            f"WARNING: SCORE_CACHE_PATH {explicit_cache} unresolved; "
+            "no fallback is applied and cache-backed evidence stays unknown.",
+            file=sys.stderr,
+        )
+    cache_path = resolve_cache_path(explicit_cache)
+    if cache_path is None and explicit_cache:
+        explicit_cache = None  # invalid explicit cache: evidence stays unknown
+    evidence = build_evidence(cv_path, cache_path)
 
     jobs = json.loads(Path(jobs_path).read_text())
     if isinstance(jobs, dict) and isinstance(jobs.get("jobs"), list):
         jobs = jobs["jobs"]
     if not isinstance(jobs, list):
         sys.exit("Jobs JSON must contain an array of jobs")
-    search_id = deterministic_search_id(jobs, cv_path, require_title)
+    search_id = deterministic_search_id(jobs, evidence, require_title)
     jobs_to_score = jobs_unscored_for_search(jobs, search_id)
     classifications = classify_jobs(jobs_to_score)
     print(f"Search ID: {search_id}", file=sys.stderr)
+    print(
+        f"Evidence: cv={Path(cv_path).name} sha {evidence['cv'].get('sha256', 'none')[:12]} "
+        f"cache={evidence['cache']['path'] or 'none'} taxonomy={evidence['taxonomy']['source']}",
+        file=sys.stderr,
+    )
     print(f"Scoring {len(jobs_to_score)} of {len(jobs)} jobs (require_title={require_title}) ...", file=sys.stderr)
     scored = [
-        score_job(j, require_title_match=require_title, search_id=search_id, role_classification=classification)
+        score_job(j, require_title_match=require_title, search_id=search_id,
+                  role_classification=classification, evidence=evidence)
         for j, classification in zip(jobs_to_score, classifications)
     ]
     apply = sum(1 for s in scored if s["cta"] == "Apply")
     skip = len(scored) - apply
-    print(f"Apply: {apply}  Skip: {skip}", file=sys.stderr)
+    insufficient = sum(1 for s in scored if s["assessment_status"] != "assessed")
+    print(f"Apply: {apply}  Skip: {skip}  Insufficient-evidence rows: {insufficient}", file=sys.stderr)
     print("\nTop Apply jobs:", file=sys.stderr)
     by_id = {(j.get("source"), j.get("job_id")): j for j in jobs}
     for s in sorted([x for x in scored if x["cta"] == "Apply"], key=lambda x: -x["fit_score"])[:10]:
         j = by_id.get((s["source"], s["job_id"]), {})
-        print(f"  {s['fit_score']:.0f}% | {j.get('title','')} | {j.get('company','')} | {s['stretch_label']}", file=sys.stderr)
+        print(f"  {s['score_display']} | {j.get('title','')} | {j.get('company','')} | {s['stretch_label']}", file=sys.stderr)
     Path(output_path).write_text(json.dumps(scored, indent=2))
     print(f"\nWrote {output_path} ({len(scored)} scores)", file=sys.stderr)
 

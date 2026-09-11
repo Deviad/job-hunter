@@ -86,6 +86,12 @@ node ~/.pi/agent/skills/job-hunter/scripts/jh-status.mjs
 node ~/.pi/agent/skills/job-hunter/scripts/jh-backup.mjs
 ```
 
+## Development checks
+
+Run `npm test` for regression tests and `npm run verify:release` for publication checks. Neither requires private research-baseline artifacts; the profile comparison explicitly skips when no local maintainer cache is available.
+
+`npm run verify:research-baseline` is a separate acquisition checkpoint. It requires the private US-001 evidence and original repository/installed runtime sources. Run it before intentional runtime edits, not as a regression gate against changed sources. Its assertions remain strict; historical reports retain the paths used when they were recorded.
+
 ## Update
 
 ```bash

@@ -27,24 +27,39 @@
  *   rp.recordResult(someUrl, 'linkedin.com', 'active_challenge', 'CAPTCHA detected');
  */
 
+import { RESTRICTION_STATES } from './linkedin-page-state.mjs';
+
 /**
  * Retry-policy states the retry module itself uses to communicate decisions.
+ * `verdict` values; `allowed`/`reason` remain the compatibility surface.
  */
 export const RETRY_VERDICT = {
   ALLOWED: 'allowed',
   KEY_EXHAUSTED: 'key_exhausted',
   CIRCUIT_BROKEN: 'circuit_broken',
+  // Strict source mode only: the first canonical restriction ended the source.
+  SOURCE_TERMINATED: 'source_terminated',
 };
+
+/**
+ * States that terminate a STRICT source policy on first observation
+ * (canonical block/rate-limit/challenge/login-required). These apply to
+ * strict policies only; legacy policies keep the 3-strike circuit breaker.
+ */
+export const STRICT_SOURCE_BLOCKING_STATES = RESTRICTION_STATES;
 
 /**
  * @param {object} opts
  * @param {number} [opts.maxRetries=3]      max attempts per key
  * @param {number} [opts.circuitBreakerThreshold=3] consecutive blocking states across origin before circuit breaks
+ * @param {boolean} [opts.strictSource=false] first canonical restriction terminates the source
  * @returns {object} policy handle
  */
-export function createRetryPolicy({ maxRetries = 3, circuitBreakerThreshold = 3 } = {}) {
+export function createRetryPolicy({ maxRetries = 3, circuitBreakerThreshold = 3, strictSource = false } = {}) {
   const keyTracker = new Map();    // key → { attempts, states[] }
   const originTracker = new Map(); // origin → { consecutive: number, broken: boolean }
+  const strictBlocking = new Set(STRICT_SOURCE_BLOCKING_STATES);
+  let sourceTerminated = null;     // { key, origin, state, reason, at }
 
   /**
    * Check whether another attempt on `key` within `origin` is allowed.
@@ -53,15 +68,30 @@ export function createRetryPolicy({ maxRetries = 3, circuitBreakerThreshold = 3 
    * @returns {{ allowed: boolean, reason?: string }}
    */
   function canRetry(key, origin) {
+    if (sourceTerminated) {
+      return {
+        allowed: false,
+        verdict: RETRY_VERDICT.SOURCE_TERMINATED,
+        reason: `Source terminated after first ${sourceTerminated.state} observation at "${sourceTerminated.key}"`,
+      };
+    }
     const o = originTracker.get(origin);
     if (o?.broken) {
-      return { allowed: false, reason: `Circuit broken for origin "${origin}" after ${circuitBreakerThreshold} consecutive blocking states` };
+      return {
+        allowed: false,
+        verdict: RETRY_VERDICT.CIRCUIT_BROKEN,
+        reason: `Circuit broken for origin "${origin}" after ${circuitBreakerThreshold} consecutive blocking states`,
+      };
     }
     const k = keyTracker.get(key);
     if (!k || k.attempts < maxRetries) {
-      return { allowed: true };
+      return { allowed: true, verdict: RETRY_VERDICT.ALLOWED };
     }
-    return { allowed: false, reason: `Key "${key}" exhausted after ${maxRetries} retries (last state: ${k.states[k.states.length - 1]?.state})` };
+    return {
+      allowed: false,
+      verdict: RETRY_VERDICT.KEY_EXHAUSTED,
+      reason: `Key "${key}" exhausted after ${maxRetries} retries (last state: ${k.states[k.states.length - 1]?.state})`,
+    };
   }
 
   /**
@@ -73,6 +103,11 @@ export function createRetryPolicy({ maxRetries = 3, circuitBreakerThreshold = 3 
    * @param {string} [reason] description
    */
   function recordResult(key, origin, state, reason = null) {
+    // Strict source mode: the first canonical restriction is terminal for
+    // the whole source, regardless of origin or how many times it repeats.
+    if (strictSource && !sourceTerminated && strictBlocking.has(state)) {
+      sourceTerminated = { key, origin, state, reason, at: new Date().toISOString() };
+    }
     // Per-key tracking
     let k = keyTracker.get(key);
     if (!k) {
@@ -102,7 +137,17 @@ export function createRetryPolicy({ maxRetries = 3, circuitBreakerThreshold = 3 
    * Check whether the circuit is currently broken for an origin.
    */
   function isCircuitBroken(origin) {
+    if (sourceTerminated) return true; // strict termination dominates
     return originTracker.get(origin)?.broken === true;
+  }
+
+  /**
+   * Strict mode only: whether the source has been terminated and by what.
+   */
+  function isSourceTerminated() {
+    return sourceTerminated
+      ? { terminated: true, ...sourceTerminated }
+      : { terminated: false };
   }
 
   /**
@@ -127,8 +172,17 @@ export function createRetryPolicy({ maxRetries = 3, circuitBreakerThreshold = 3 
         broken: o.broken,
       });
     }
-    return { keys, origins, maxRetries, circuitBreakerThreshold };
+    return { keys, origins, maxRetries, circuitBreakerThreshold, strictSource, sourceTerminated: sourceTerminated ?? null };
   }
 
-  return { canRetry, recordResult, isCircuitBroken, getStats };
+  return { canRetry, recordResult, isCircuitBroken, isSourceTerminated, getStats };
+}
+
+/**
+ * Strict source retry policy: first canonical block/rate-limit/challenge/
+ * login-required observation terminates the source (RETRY_VERDICT.SOURCE_TERMINATED).
+ * Use one per source (e.g. linkedin-search), independent of CDP port.
+ */
+export function createStrictSourceRetryPolicy({ maxRetries = 3, circuitBreakerThreshold = 3 } = {}) {
+  return createRetryPolicy({ maxRetries, circuitBreakerThreshold, strictSource: true });
 }

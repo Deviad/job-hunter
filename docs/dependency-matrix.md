@@ -7,7 +7,7 @@ This matrix covers every bundled skill and classifies code dependencies, executa
 | Skill | Class | Node packages | Python dependencies | Direct skill dependencies |
 |---|---|---|---|---|
 | `job-hunter` | Core | `better-sqlite3`, `ws` | None | LinkedIn, Indeed, scorer, salary, auto-apply |
-| `linkedin-job-search` | Core | `ws`, workspace `better-sqlite3` | None | CAPTCHA and browser repair paths |
+| `linkedin-job-search` | Core | `ws`, workspace `better-sqlite3`, sibling `job-hunter` skill (persisted LinkedIn access state) | None | CAPTCHA and browser repair paths |
 | `indeed-job-search` | Core | `ws`, workspace `better-sqlite3` | None | LinkedIn SQLite saver, CAPTCHA and browser repair paths |
 | `job-match-scorer` | Core | workspace `better-sqlite3` | Standard-library scorer | DOCX input contract, salary handoff |
 | `salary-calculator` | Core | `better-sqlite3` | None | Browser session bridge for posted-salary evidence |

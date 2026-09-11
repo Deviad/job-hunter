@@ -76,6 +76,10 @@ Run focused tests with the scripts named `test-*.mjs` under `scripts/` and the t
 - Unclear page state: use `qwen-screenshot-debug` before retrying navigation.
 - Application action: hand off to `auto-job-application`; the search skill does not answer screening questions.
 
+## Research-Safety Gates
+
+Every LinkedIn entrypoint in this skill reads the persisted access state (`jh_meta` key `source.linkedin.access`, owned by the sibling `job-hunter` skill) before any browser or CDP contact: `cdp-preflight.mjs`, `search-linkedin-jobs.mjs --strict-owner`, and `batch-fetch-jds.mjs` stop with a sanitized `SOURCE_PAUSED` / `ACCESS_STATE_UNAVAILABLE` result. The first canonical restriction (`active_challenge`, `blocked`, `rate_limited`, `login_required`; the single source of truth is `RESTRICTION_STATES` in `linkedin-page-state.mjs`) is persisted as a pause at the observation site, before the owner releases, by the collector's strict owner and by the backfill. Every automated navigation, including stored `jobs.url` values, is validated by `researchNavigationDecision` against the LinkedIn jobs-route allowlist immediately before it is sent; non-jobs destinations are excluded with a reason and never navigated. This skill therefore requires the `job-hunter` skill installed beside it.
+
 ## References
 
 - [LinkedIn selectors](references/linkedin-selectors.md)

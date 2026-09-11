@@ -2,9 +2,10 @@
 // Canonical home: $JOBHUNTER_HOME, default ~/.job-hunter
 import path from 'node:path';
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 
 export const JOBHUNTER_HOME =
-  process.env.JOBHUNTER_HOME || path.join(process.env.HOME, '.job-hunter');
+  process.env.JOBHUNTER_HOME || path.join(process.env.HOME || homedir(), '.job-hunter');
 export const DB_PATH =
   process.env.JOBHUNTER_DB || path.join(JOBHUNTER_HOME, 'jobhunter.sqlite');
 export const CACHE_PATH = path.join(JOBHUNTER_HOME, 'personal-info-cache.json');

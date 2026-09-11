@@ -43,7 +43,7 @@ Separate:
 - work-authorization, citizenship, clearance, and sponsorship requirements;
 - compensation or travel constraints.
 
-Do not turn a preferred criterion into a blocker. Preserve the source text supporting every mandatory requirement.
+Do not turn a preferred criterion into a blocker. Preserve the source text supporting every mandatory requirement. Note that the inline scorer only recognizes a mandatory term when it appears in its requirement vocabulary or in an `experience with` / `knowledge of` phrase; a requirement worded outside both is not counted in the denominator, so review unassessed mandatory sentences rather than treating the score as complete.
 
 ### 4. Match Against Runtime Evidence
 

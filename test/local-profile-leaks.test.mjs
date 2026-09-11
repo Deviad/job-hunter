@@ -39,7 +39,63 @@ with zipfile.ZipFile(output, 'w') as archive:
   assert.equal(result.status, 0, result.stderr);
 }
 
+const gitAvailable = spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0;
+
+function git(root, ...args) {
+  const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+}
+
+async function writePrivateEvidence(root) {
+  await writeFile(join(root, '.gitignore'), 'agent-output/\n');
+  await mkdir(join(root, 'agent-output'));
+  await writeFile(join(root, 'agent-output', 'evidence.md'), 'Private Employer Name');
+}
+
 describe('local profile leak gate', () => {
+  it('ignores untracked Git-ignored evidence but rejects publishable leaks', { skip: !gitAvailable }, async () => {
+    const { root, home } = await fixture();
+    git(root, 'init', '--quiet');
+    git(root, 'config', 'core.excludesFile', '/dev/null');
+    await writePrivateEvidence(root);
+    await writeFile(join(root, 'skills', 'example', 'SKILL.md'), '# Skill\nExample Candidate');
+    const clean = await run(root, home);
+    assert.equal(clean.exitCode, 0);
+    assert.equal(clean.skipped, false);
+
+    await writeFile(join(root, 'skills', 'example', 'SKILL.md'), '# Skill\nPrivate Employer Name');
+    const leaked = await run(root, home);
+    assert.equal(leaked.exitCode, 1);
+    assert.deepEqual(leaked.findings.map((finding) => finding.path), ['skills/example/SKILL.md']);
+  });
+
+  it('rejects profile leaks in tracked ignored files', { skip: !gitAvailable }, async () => {
+    const { root, home } = await fixture();
+    git(root, 'init', '--quiet');
+    await writePrivateEvidence(root);
+    git(root, 'add', '--force', 'agent-output/evidence.md');
+    const result = await run(root, home);
+    assert.equal(result.exitCode, 1);
+    assert.deepEqual(result.findings.map((finding) => finding.path), ['agent-output/evidence.md']);
+  });
+
+  it('scans complete non-Git export directories', async () => {
+    const { root, home } = await fixture();
+    await writePrivateEvidence(root);
+    const result = await run(root, home);
+    assert.equal(result.exitCode, 1);
+    assert.deepEqual(result.findings.map((finding) => finding.path), ['agent-output/evidence.md']);
+  });
+
+  it('falls back to full scanning when Git enumeration fails', { skip: !gitAvailable }, async () => {
+    const { root, home } = await fixture();
+    git(root, 'init', '--quiet');
+    await writePrivateEvidence(root);
+    await writeFile(join(root, '.git', 'index'), 'invalid Git index');
+    const result = await run(root, home);
+    assert.equal(result.exitCode, 1);
+    assert.deepEqual(result.findings.map((finding) => finding.path), ['agent-output/evidence.md']);
+  });
   it('reports matched field names without printing private values', async () => {
     const { root, home } = await fixture();
     await writeFile(join(root, 'skills', 'example', 'SKILL.md'), '# Skill\nPrivate Employer Name');

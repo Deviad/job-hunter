@@ -37,6 +37,51 @@ export const PAGE_STATE = {
 };
 
 /**
+ * Canonical LinkedIn restriction states. One observation of any of these is
+ * a source-level restriction for the research workflow: strict retry
+ * policies terminate on it, wrappers/preflight persist the pause on it, and
+ * collectors report it as a terminal exit. Every caller imports this set
+ * instead of keeping its own copy.
+ */
+export const RESTRICTION_STATES = Object.freeze([
+  PAGE_STATE.ACTIVE_CHALLENGE,
+  PAGE_STATE.BLOCKED,
+  PAGE_STATE.RATE_LIMITED,
+  PAGE_STATE.LOGIN_REQUIRED,
+]);
+
+export function isRestrictionState(state) {
+  return RESTRICTION_STATES.includes(state);
+}
+
+const LINKEDIN_RESEARCH_HOSTS = new Set(['linkedin.com', 'www.linkedin.com']);
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+
+/**
+ * Decide whether an automated research navigation may be sent. Production
+ * permits only HTTPS LinkedIn job-search / job-detail routes; member,
+ * company, feed and every other destination is rejected before any target
+ * is created. Explicit loopback fixture origins are opt-in for tests only.
+ *
+ * @param {string} url
+ * @param {{ fixtureOrigins?: string[] }} [options]
+ * @returns {{ allowed: boolean, code: string, reason: string|null }}
+ */
+export function researchNavigationDecision(url, { fixtureOrigins = [] } = {}) {
+  let parsed;
+  try { parsed = new URL(url); }
+  catch { return { allowed: false, code: 'invalid_url', reason: 'Invalid research URL' }; }
+  if (parsed.username || parsed.password) return { allowed: false, code: 'credentials_in_url', reason: 'Research URLs cannot contain credentials' };
+  if (['http:', 'https:'].includes(parsed.protocol) && LOOPBACK_HOSTS.has(parsed.hostname) && fixtureOrigins.includes(parsed.origin)) {
+    return { allowed: true, code: 'fixture_allowed', reason: null };
+  }
+  if (parsed.protocol !== 'https:') return { allowed: false, code: 'invalid_url', reason: 'Research URLs require HTTPS' };
+  if (!LINKEDIN_RESEARCH_HOSTS.has(parsed.hostname) || parsed.port) return { allowed: false, code: 'disallowed_host', reason: 'Research requires a LinkedIn jobs destination' };
+  if (!/^\/jobs(?:\/search|\/view\/\d+)?\/?$/.test(parsed.pathname)) return { allowed: false, code: 'disallowed_route', reason: 'Only LinkedIn jobs routes are allowed' };
+  return { allowed: true, code: 'allowed', reason: null };
+}
+
+/**
  * Terminal run-level statuses (page states + run-level only).
  */
 export const RUN_STATUS = {

@@ -30,7 +30,7 @@ export async function run(rootDir) {
   }
 
   // Also match `npm run <script>` — these resolve to package.json scripts
-  const npmRunRe = /npm run (\w[\w-]*)/g;
+  const npmRunRe = /npm run (\w[\w:-]*)/g;
   const npmRefs = new Set();
   while ((m = npmRunRe.exec(content)) !== null) {
     npmRefs.add(m[1]);

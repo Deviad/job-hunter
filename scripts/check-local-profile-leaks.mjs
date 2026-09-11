@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -83,6 +83,20 @@ print(json.dumps(values))
 }
 
 async function filesUnder(rootDir) {
+  const worktree = spawnSync('git', ['-C', rootDir, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' });
+  if (!worktree.error && worktree.status === 0) {
+    const gitRoot = await realpath(worktree.stdout.trim()).catch(() => null);
+    if (gitRoot === await realpath(rootDir)) {
+      const listed = spawnSync('git', ['-C', rootDir, 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
+        encoding: 'utf8',
+        maxBuffer: Infinity,
+      });
+      if (!listed.error && listed.status === 0) {
+        return [...new Set(listed.stdout.split('\0').filter(Boolean))].map((file) => join(rootDir, file));
+      }
+    }
+  }
+
   const files = [];
   async function walk(dir) {
     for (const entry of await readdir(dir, { withFileTypes: true })) {

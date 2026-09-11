@@ -17,7 +17,17 @@
  *   await b.waitForSlot();  // sleep until a slot is available
  *   // On cleanup: b.destroy() (optional)
  *
- * Budged file corruption or I/O errors → warn and fail open (caller proceeds).
+ * Legacy fail-open contract (kept for existing callers): budget file corruption
+ * or I/O errors warn and let the caller proceed.
+ *
+ * STRICT SOURCE OWNER (S04, opt-in; legacy behavior above is unchanged)
+ *   const res = await acquireStrictLinkedInOwner({ dbPath, lockDir, runId });
+ *   if (!res.ok) → deny admission (never warn-and-continue).
+ *   const slot = await res.owner.reserveRequest();  // rechecks persisted
+ *     access + honors cancel/pause while waiting.
+ * Strict mode is fail-closed: corrupt/busy/unwritable storage, contention,
+ * mutex timeout and non-ready persisted access deny instead of proceeding.
+ * Lease and budget use one source-wide identity independent of CDP port.
  */
 
 import {
@@ -31,6 +41,7 @@ import {
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -102,7 +113,7 @@ function atomicCreate(filePath, content) {
 const MUTEX_RETRY_MS = 50;
 const MUTEX_MAX_WAIT_MS = 3000;
 
-async function withMutex(lockFile, fn) {
+async function withMutex(lockFile, fn, maxWaitMs = MUTEX_MAX_WAIT_MS) {
   const started = Date.now();
   while (true) {
     if (atomicCreate(lockFile, String(process.pid))) {
@@ -123,7 +134,7 @@ async function withMutex(lockFile, fn) {
       // Lockfile vanished between create attempt and read — retry.
       continue;
     }
-    if (Date.now() - started > MUTEX_MAX_WAIT_MS) {
+    if (Date.now() - started > maxWaitMs) {
       throw new Error(`mutex timeout on ${lockFile}`);
     }
     await sleep(MUTEX_RETRY_MS + Math.random() * 30);
@@ -466,4 +477,384 @@ export function tryCreateSharedBudget(opts) {
     console.warn(`  [cdp-lease] Could not create shared budget "${opts?.budgetName}": ${err.message}`);
     return null;
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  STRICT SOURCE OWNER — one owner per LinkedIn source, fail-closed
+// ═══════════════════════════════════════════════════════════════════
+//
+// Extends the lease/budget primitives above; no competing storage.
+// A strict owner binds:
+//   * one source-wide lease identity (port-independent),
+//   * one source-wide budget identity (port-independent),
+//   * a required dbPath whose persisted access state is rechecked at
+//     acquisition, at every reserveRequest entry, and while waiting.
+//
+// Every denial is a discriminated result ({ ok: false, stage, reason,
+// detail }); strict mode never warns and continues. Legacy acquireLease/
+// createSharedBudget keep their throw/fail-open contracts untouched.
+//
+// Access reader resolution (in order):
+//   1. opts.accessReader — function(dbPath) -> { ok, allowed, error? }
+//   2. $LINKEDIN_ACCESS_MODULE (file path) — for tests/alt layouts
+//   3. sibling skill file linkedin-job-search → ../job-hunter/scripts/
+//      linkedin-access.mjs (valid in repo checkout and installed layout)
+// If none resolves, strict acquisition denies: an unverifiable access
+// state is not an admitted one.
+
+function strictDeny(stage, reason, detail = undefined) {
+  return { ok: false, stage, reason, ...(detail !== undefined ? { detail } : {}) };
+}
+
+function isValidDbPath(value) {
+  return (
+    typeof value === 'string' &&
+    value.trim().length > 0 &&
+    !value.includes('\0') &&
+    value !== ':memory:' &&
+    !value.startsWith('file:')
+  );
+}
+
+async function resolveAccessReader(opts) {
+  if (typeof opts.accessReader === 'function') {
+    return {
+      reader: opts.accessReader,
+      pauser: typeof opts.accessPauser === 'function' ? opts.accessPauser : null,
+      source: 'injected',
+    };
+  }
+  const candidates = [];
+  if (process.env.LINKEDIN_ACCESS_MODULE) candidates.push(process.env.LINKEDIN_ACCESS_MODULE);
+  try {
+    candidates.push(fileURLToPath(new URL('../../job-hunter/scripts/linkedin-access.mjs', import.meta.url)));
+  } catch {
+    // Non-file import context — nothing to resolve.
+  }
+  for (const candidate of candidates) {
+    if (!candidate || !existsSync(candidate)) continue;
+    try {
+      const mod = await import(pathToFileURL(candidate).href);
+      if (typeof mod.readLinkedInAccess === 'function') {
+        return {
+          reader: mod.readLinkedInAccess,
+          pauser: typeof mod.pauseLinkedInAccess === 'function' ? mod.pauseLinkedInAccess : null,
+          source: candidate,
+        };
+      }
+    } catch {
+      // Unreadable module — fall through to denial, never fail open.
+    }
+  }
+  return { reader: null, pauser: null, source: 'unavailable' };
+}
+
+// Maps a persisted-access read to strict admission. Only an explicit
+// ready state admits; paused, missing, invalid or errored state denies.
+function strictAccessVerdict(readResult) {
+  if (readResult && readResult.ok === true && readResult.allowed === true) {
+    return { allowed: true };
+  }
+  if (readResult && readResult.ok === true && readResult.allowed === false) {
+    return { allowed: false, reason: 'access_paused', detail: readResult.record?.reason ?? null };
+  }
+  return { allowed: false, reason: 'access_unavailable', detail: readResult?.error?.code ?? 'READER_DID_NOT_RETURN_STATE' };
+}
+
+function strictReadLease(leasePath) {
+  // Returns { state: 'free' | 'corrupt' | 'held' | 'takeover', ... }.
+  if (!existsSync(leasePath)) return { state: 'free' };
+  let raw;
+  try {
+    raw = readFileSync(leasePath, 'utf8');
+  } catch (error) {
+    return { state: 'corrupt', detail: `lease unreadable: ${error.code ?? error.message}` };
+  }
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return { state: 'corrupt', detail: 'lease file is not valid JSON' };
+  }
+  if (!data || typeof data !== 'object' || typeof data.pid !== 'number' || data.pid <= 0) {
+    return { state: 'corrupt', detail: 'lease file has no valid holder pid' };
+  }
+  const hbAge = (() => {
+    const t = Date.parse(data.heartbeat ?? '');
+    return Number.isFinite(t) ? Date.now() - t : Number.POSITIVE_INFINITY;
+  })();
+  const alive = pidAlive(data.pid);
+  if (alive && hbAge <= (data.heartbeatThresholdMs ?? DEFAULT_HEARTBEAT_THRESHOLD_MS)) {
+    return { state: 'held', detail: `held by live pid ${data.pid} (run ${data.runId ?? 'unknown'})` };
+  }
+  return { state: 'takeover', detail: `stale lease from pid ${data.pid} (alive=${alive}, heartbeatAgeMs=${Number.isFinite(hbAge) ? Math.round(hbAge) : 'never'})` };
+}
+
+/**
+ * Acquire the strict LinkedIn source owner: one lease identity and one
+ * budget identity for the whole LinkedIn source, independent of CDP port.
+ * Never throws for operational conditions; all denials are results.
+ *
+ * @param {object} opts
+ * @param {string} opts.dbPath                required workspace DB (persisted access source)
+ * @param {string} [opts.lockDir]             storage dir (default env or tmp)
+ * @param {string} [opts.runId]
+ * @param {string} [opts.leaseName]           default 'linkedin-source' (port-free)
+ * @param {string} [opts.budgetName]          default 'linkedin-source' (port-free)
+ * @param {number} [opts.windowMs]            default 60000 (compat value, not a platform claim)
+ * @param {number} [opts.maxRequests]         default 12 (compat value, not a platform claim)
+ * @param {function} [opts.accessReader]      injected dbPath -> access read; else resolved module
+ * @param {function} [opts.accessPauser]      injected (dbPath, {reason, runId}) -> pause write; else resolved module
+ * @param {function} [opts.isCancelled]       () => boolean, checked while waiting
+ * @param {number} [opts.waitPollMs]          recheck cadence while waiting (default 250)
+ * @param {number} [opts.mutexMaxWaitMs]      strict mutex budget (default 3000)
+ * @param {number} [opts.maxWaitMs]           ceiling for budget waits (default 130000)
+ * @returns {Promise<{ok:true, owner:object}|{ok:false, stage:string, reason:string, detail?:string}>}
+ */
+export async function acquireStrictLinkedInOwner(opts = {}) {
+  const {
+    dbPath,
+    leaseName = 'linkedin-source',
+    budgetName = 'linkedin-source',
+    windowMs = 60_000,   // compat default (same value as legacy budgets), not a platform claim
+    maxRequests = 12,    // compat default (same value as legacy budgets), not a platform claim
+    waitPollMs = 250,
+    mutexMaxWaitMs = MUTEX_MAX_WAIT_MS,
+    maxWaitMs = 90_000,
+    isCancelled = () => false,
+  } = opts;
+
+  if (!isValidDbPath(dbPath)) {
+    return strictDeny('arguments', 'db_path_required', 'strict ownership requires an explicit workspace dbPath');
+  }
+  const lockDir = opts.lockDir || path.join(homedir(), '.job-hunter', 'locks');
+  if (typeof lockDir !== 'string' || !path.isAbsolute(lockDir) || lockDir.includes('\0')) {
+    // A relative or malformed lockDir would silently create state under cwd.
+    return strictDeny('storage', 'storage_unavailable', 'lockDir must be an absolute path');
+  }
+  try {
+    mkdirSync(lockDir, { recursive: true });
+  } catch (error) {
+    return strictDeny('storage', 'storage_unavailable', `lockDir unavailable: ${error.code ?? error.message}`);
+  }
+
+  const { reader: accessReader, pauser: accessPauser, source: accessSource } = await resolveAccessReader(opts);
+  if (!accessReader) {
+    return strictDeny('access', 'access_unavailable', 'no persisted-access reader could be resolved; strict mode does not proceed unverified');
+  }
+  const checkAccess = () => strictAccessVerdict(accessReader(dbPath));
+
+  const safeLease = leaseName.replace(/[^a-zA-Z0-9:_-]/g, '_');
+  const leasePath = path.join(lockDir, `${safeLease}.lease`);
+  const safeBudget = budgetName.replace(/[^a-zA-Z0-9:_-]/g, '_');
+  const budgetPath = path.join(lockDir, `budget-${safeBudget}.json`);
+  const budgetLockPath = path.join(lockDir, `budget-${safeBudget}.lock`);
+
+  // Persistent access must already be ready before any source admission.
+  const entryAccess = checkAccess();
+  if (!entryAccess.allowed) {
+    return strictDeny('access', entryAccess.reason, `persisted access is not ready (source: ${accessSource})`);
+  }
+
+  // Budget storage: corrupt state denies (strict), unlike legacy fail-open.
+  if (existsSync(budgetPath)) {
+    try {
+      const data = JSON.parse(readFileSync(budgetPath, 'utf8'));
+      if (!data || !Array.isArray(data.requests)) {
+        return strictDeny('storage', 'budget_corrupt', `${budgetPath} exists but holds no valid request window`);
+      }
+    } catch {
+      return strictDeny('storage', 'budget_corrupt', `${budgetPath} exists but is not readable JSON`);
+    }
+  }
+
+  // Lease: contention/corruption/unwritable storage deny.
+  const leaseState = strictReadLease(leasePath);
+  if (leaseState.state === 'corrupt') return strictDeny('lease', 'lease_corrupt', leaseState.detail);
+  if (leaseState.state === 'held') return strictDeny('lease', 'lease_contended', leaseState.detail);
+
+  const runId = typeof opts.runId === 'string' && opts.runId ? opts.runId : strictDefaultRunId();
+  const leaseData = {
+    leaseName,
+    pid: process.pid,
+    runId,
+    acquiredAt: new Date().toISOString(),
+    heartbeat: new Date().toISOString(),
+    tabs: [],
+  };
+  if (leaseState.state === 'takeover') safeUnlink(leasePath);
+  let claimed = false;
+  try {
+    claimed = atomicCreate(leasePath, JSON.stringify(leaseData, null, 2));
+  } catch (error) {
+    // Unwritable storage (EACCES/EROFS) denies admission in strict mode.
+    return strictDeny('storage', 'storage_unavailable', `lease create failed: ${error.code ?? error.message}`);
+  }
+  if (!claimed) {
+    const after = strictReadLease(leasePath);
+    if (after.state === 'corrupt') return strictDeny('lease', 'lease_corrupt', after.detail);
+    return strictDeny('lease', 'lease_contended', after.detail ?? 'another strict owner claimed the lease first');
+  }
+
+  const owner = {
+    leaseName,
+    budgetName,
+    leasePath,
+    budgetPath,
+    runId,
+    accessSource,
+    cancelled: false,
+    isAborted: () => owner.cancelled || isCancelled(),
+    abort() { owner.cancelled = true; },
+
+    /**
+     * Persist the source pause at the observation site, before this owner
+     * releases. Returns the access API result shape; an unavailable pauser
+     * is reported, never silently skipped. Also aborts queued waits.
+     */
+    pauseSource(reason) {
+      owner.cancelled = true;
+      if (!accessPauser) {
+        return { ok: false, allowed: false, record: null, error: { code: 'PAUSE_UNAVAILABLE', message: 'No persisted-access pauser could be resolved' } };
+      }
+      try {
+        const res = accessPauser(dbPath, { reason: String(reason ?? 'strict owner observed a restriction').slice(0, 240), runId });
+        return res && typeof res === 'object' ? res : { ok: false, allowed: false, record: null, error: { code: 'STORAGE_ERROR', message: 'Pause write returned no result' } };
+      } catch {
+        return { ok: false, allowed: false, record: null, error: { code: 'STORAGE_ERROR', message: 'Pause write threw' } };
+      }
+    },
+
+    refreshHeartbeat() {
+      const state = strictReadLease(leasePath);
+      if (state.state === 'held' && state.detail.includes(`pid ${process.pid}`)) {
+        // Still ours — rewrite heartbeat (contention-safe rewrite of own record).
+        try {
+          writeFileSync(leasePath, JSON.stringify({
+            ...JSON.parse(readFileSync(leasePath, 'utf8')),
+            heartbeat: new Date().toISOString(),
+          }, null, 2));
+          return true;
+        } catch { return false; }
+      }
+      return false;
+    },
+
+    registerTab(targetId) {
+      if (!targetId) return false;
+      try {
+        const data = JSON.parse(readFileSync(leasePath, 'utf8'));
+        if (data.pid !== process.pid || data.runId !== runId) return false;
+        if (!data.tabs.includes(targetId)) { data.tabs.push(targetId); writeFileSync(leasePath, JSON.stringify(data, null, 2)); }
+        return true;
+      } catch { return false; }
+    },
+
+    /**
+     * Reserve one source-wide request slot. Fail-closed sequence:
+     * cancel → access → budget read → (wait with per-slice cancel/pause
+     * rechecks) → access recheck → write. Any storage failure denies.
+     * The access recheck runs immediately before the budget mutex is
+     * taken, never inside it, so the SQLite read never holds the lock.
+     */
+    async reserveRequest() {
+      if (owner.isAborted()) return strictDeny('wait', 'cancelled', 'strict owner was aborted before the request');
+      const started = Date.now();
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const preFlight = checkAccess();
+        if (!preFlight.allowed) return strictDeny('access', preFlight.reason, 'persisted access is not ready');
+        let grant = null;
+        try {
+          grant = await withMutex(budgetLockPath, () => {
+            let data = { windowMs, requests: [] };
+            if (existsSync(budgetPath)) {
+              data = JSON.parse(readFileSync(budgetPath, 'utf8'));
+              if (!data || !Array.isArray(data.requests)) {
+                return { deny: strictDeny('storage', 'budget_corrupt', 'budget window became unreadable mid-run') };
+              }
+            }
+            const cutoff = Date.now() - windowMs;
+            data.requests = data.requests.filter((t) => typeof t === 'number' && t > cutoff);
+            if (data.requests.length >= maxRequests) {
+              const waitMs = (data.requests[0] + windowMs) - Date.now() + 40;
+              return { wait: Math.max(waitMs, 10) };
+            }
+            if (owner.isAborted()) {
+              return { deny: strictDeny('wait', 'cancelled', 'strict owner was aborted while waiting') };
+            }
+            data.requests.push(Date.now());
+            writeFileSync(budgetPath, JSON.stringify(data, null, 2));
+            return { ok: true, used: data.requests.length, waitedMs: Date.now() - started };
+          }, mutexMaxWaitMs);
+        } catch (error) {
+          return strictDeny('storage', 'storage_error', `budget storage unavailable: ${error.message}`);
+        }
+        if (grant.ok) return { ok: true, waitedMs: grant.waitedMs, used: grant.used };
+        if (grant.deny) return grant.deny;
+        // Wait in recheck slices so cancellation and pause deny promptly.
+        let remaining = grant.wait;
+        while (remaining > 0) {
+          if (owner.isAborted()) return strictDeny('wait', 'cancelled', 'strict owner was aborted while waiting');
+          const slice = Math.min(waitPollMs, remaining);
+          await sleep(slice);
+          remaining -= slice;
+          const waitAccess = checkAccess();
+          if (!waitAccess.allowed) return strictDeny('access', waitAccess.reason, 'persisted access changed while waiting');
+          if (Date.now() - started > maxWaitMs) {
+            return strictDeny('wait', 'budget_exhausted', `budget slot did not free within ${maxWaitMs} ms`);
+          }
+        }
+      }
+    },
+
+    /**
+     * Ownership-safe release: removes only the lease this owner wrote
+     * (matching pid + runId). A lease overwritten elsewhere is abandoned,
+     * never deleted — same rule as legacy, but reported as a result.
+     * The budget file is shared source-wide state and intentionally persists.
+     */
+    release() {
+      owner.cancelled = true;
+      try {
+        if (!existsSync(leasePath)) return { released: true, alreadyGone: true };
+        const data = JSON.parse(readFileSync(leasePath, 'utf8'));
+        if (data.pid !== process.pid || data.runId !== runId) {
+          return { released: false, abandoned: true, reason: 'lease no longer belongs to this owner' };
+        }
+        safeUnlink(leasePath);
+        return { released: true };
+      } catch {
+        return { released: false, abandoned: true, reason: 'lease state unreadable at release' };
+      }
+    },
+
+    snapshot() {
+      try {
+        const data = JSON.parse(readFileSync(budgetPath, 'utf8'));
+        return { windowMs, requests: Array.isArray(data.requests) ? data.requests.length : null };
+      } catch {
+        return { windowMs, requests: null };
+      }
+    },
+  };
+
+  return { ok: true, owner };
+}
+
+/**
+ * Non-throwing wrapper matching the acquire/try naming: operational
+ * denials and unexpected exceptions both become discriminated results.
+ */
+export async function tryAcquireStrictLinkedInOwner(opts = {}) {
+  try {
+    return await acquireStrictLinkedInOwner(opts);
+  } catch (error) {
+    return strictDeny('error', 'unexpected_error', error?.message ?? String(error));
+  }
+}
+
+function strictDefaultRunId() {
+  const random = Math.random().toString(36).slice(2, 8);
+  return `strict-${Math.floor(Date.now() / 1000).toString(36)}${random}`;
 }

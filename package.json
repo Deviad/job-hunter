@@ -7,6 +7,7 @@
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "test:skills": "node scripts/test-installed-skills.mjs",
+    "verify:research-baseline": "node --test scripts/check-research-baseline.mjs",
     "install:global": "node scripts/install.mjs",
     "verify-runtime": "node scripts/verify-runtime-dependencies.mjs",
     "verify:release": "node scripts/check-release-safety.mjs && node scripts/check-local-profile-leaks.mjs && node scripts/verify-skill-closure.mjs && node scripts/verify-dependency-matrix.mjs && node scripts/check-doc-commands.mjs && node scripts/check-required-doc-sections.mjs",

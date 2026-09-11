@@ -20,6 +20,8 @@ import { spawnSync as spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { JOBHUNTER_HOME, DB_PATH as DEFAULT_DB_PATH } from './jh-common.mjs';
 import { ROLE_TAXONOMY_VERSION } from './role-taxonomy.mjs';
+import { readLinkedInAccess, pauseLinkedInAccess } from './linkedin-access.mjs';
+import { RESTRICTION_STATES } from '../../linkedin-job-search/scripts/linkedin-page-state.mjs';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SKILLS_ROOT = path.resolve(SCRIPT_DIR, '..', '..'); // ~/.pi/agent/skills
@@ -198,7 +200,7 @@ function runCdpPreflight(opts) {
   const probeUrl = opts.source === 'linkedin'
     ? `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(opts.role)}&location=${encodeURIComponent(opts.location)}`
     : `${opts.domain}/jobs?q=${encodeURIComponent(opts.query)}&l=${encodeURIComponent(opts.location)}`;
-  const args = [CDP_PREFLIGHT_SCRIPT, '--port', String(opts.cdpPort), '--json', '--probe-url', probeUrl];
+  const args = [CDP_PREFLIGHT_SCRIPT, '--port', String(opts.cdpPort), '--db', opts.db, '--json', '--probe-url', probeUrl];
   const res = spawn('node', args, { encoding: 'utf8' });
   let parsed = null;
   try { parsed = JSON.parse((res.stdout || '').trim().split('\n').pop()); } catch {}
@@ -210,19 +212,21 @@ function runCdpPreflight(opts) {
 // linkedin-page-state.mjs / search-indeed-jobs.mjs isVerificationText); it
 // interprets the exit code + summary the search script already produces.
 function classifySearchOutcome(opts, spawnResult, summary) {
-  if (spawnResult.status === 0) return { verdict: 'ok' };
   if (opts.source === 'linkedin') {
     // search-linkedin-jobs.mjs: exit 3 = cancelled, exit 2 = terminal blocking state
     // or persist failure. Summary.terminalStatuses carries the page states.
     const states = summary?.terminalStatuses?.searchQueries?.map((q) => q.status) || [];
     const detailState = summary?.terminalStatuses?.detailPages?.status;
-    const blocking = new Set(['active_challenge', 'blocked', 'rate_limited']);
-    if (states.some((s) => blocking.has(s)) || blocking.has(detailState)) {
-      return { verdict: 'blocked', reason: `LinkedIn page state: ${[...states, detailState].filter((s) => blocking.has(s)).join(', ')}` };
+    const blocking = new Set(RESTRICTION_STATES);
+    const state = [...states, detailState].find((s) => blocking.has(s));
+    if (state) {
+      return { verdict: 'blocked', state, reason: `LinkedIn page state: ${[...states, detailState].filter((s) => blocking.has(s)).join(', ')}` };
     }
+    if (spawnResult.status === 0) return { verdict: 'ok' };
     if (spawnResult.status === 3) return { verdict: 'cancelled' };
     return { verdict: 'fatal', reason: `search-linkedin-jobs.mjs exited ${spawnResult.status}` };
   }
+  if (spawnResult.status === 0) return { verdict: 'ok' };
   // indeed: script throws a plain Error and exits 1 on verification/CAPTCHA text
   const stderrTail = String(spawnResult.stderr || '').slice(-2000);
   if (/verification\/CAPTCHA page detected/i.test(stderrTail)) {
@@ -233,6 +237,16 @@ function classifySearchOutcome(opts, spawnResult, summary) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  if (opts.source === 'linkedin') {
+    const access = readLinkedInAccess(opts.db);
+    if (!access.ok || !access.allowed) {
+      const code = access.ok ? 'SOURCE_PAUSED' : 'ACCESS_STATE_UNAVAILABLE';
+      const reason = access.ok ? 'LinkedIn research is paused' : 'LinkedIn access state is unavailable';
+      report(opts, `[blocked] ${reason}`);
+      if (opts.json) console.log(JSON.stringify({ ok: false, blocked: true, code, reason }));
+      process.exit(EXIT.BLOCKED);
+    }
+  }
   const id = runId(opts);
   mkdirSync(path.join(RUNS_DIR, id), { recursive: true });
   const startedAt = Date.now();
@@ -264,10 +278,12 @@ async function main() {
     const preflight = runCdpPreflight(opts);
     checkpoint.preflight.cdp = { ok: preflight.ok, status: preflight.status, pages: preflight.parsed?.pages };
     if (!preflight.ok) {
-      checkpoint.status = 'preflight-failed';
+      const blocked = opts.source === 'linkedin' && (preflight.parsed?.paused === true || preflight.parsed?.admitted === false || Boolean(preflight.parsed?.accessError));
+      checkpoint.status = blocked ? 'blocked' : 'preflight-failed';
       saveCheckpoint(id, checkpoint);
-      report(opts, `[preflight-failed] cdp-preflight.mjs against the exact ${opts.source} URL for ${opts.country} failed:\n${preflight.raw}`);
-      process.exit(EXIT.PREFLIGHT);
+      report(opts, `[${checkpoint.status}] cdp-preflight.mjs against the exact ${opts.source} URL for ${opts.country} failed:\n${preflight.raw}`);
+      if (opts.json) console.log(JSON.stringify({ ok: false, blocked, runId: id, reason: blocked ? 'LinkedIn access is blocked' : 'CDP preflight failed' }));
+      process.exit(blocked ? EXIT.BLOCKED : EXIT.PREFLIGHT);
     }
     report(opts, `[preflight] doctor OK, CDP+URL preflight OK for ${opts.source}/${opts.country}`);
   } else {
@@ -331,10 +347,18 @@ async function main() {
   }
 
   if (outcome.verdict === 'blocked') {
+    if (opts.source === 'linkedin') {
+      const pause = pauseLinkedInAccess(opts.db, { reason: `wrapper observed ${outcome.state} on linkedin search`, runId: id });
+      if (!pause.ok) {
+        report(opts, '[blocked] LinkedIn pause could not be persisted');
+        if (opts.json) console.log(JSON.stringify({ ok: false, blocked: true, runId: id, pausePersisted: false, reason: 'LinkedIn pause could not be persisted' }));
+        process.exit(EXIT.BLOCKED);
+      }
+    }
     checkpoint.status = 'blocked';
     checkpoint.blockers.push({ at: new Date().toISOString(), reason: outcome.reason });
     saveCheckpoint(id, checkpoint);
-    report(opts, `[blocked] ${outcome.reason}\nStop — this is a hard blocker (security check / CAPTCHA / verification wall). Do NOT retry automatically. Manual browser intervention needed at ${opts.source === 'linkedin' ? 'https://www.linkedin.com' : opts.domain}. See captcha-resolution / qwen-screenshot-debug skills if a recipe applies, otherwise pause for the user.`);
+    report(opts, `[blocked] ${outcome.reason}\nStop — do not retry automatically. Await explicit operator review.`);
     if (opts.json) console.log(JSON.stringify({ ok: false, blocked: true, runId: id, reason: outcome.reason }, null, 2));
     process.exit(EXIT.BLOCKED);
   }

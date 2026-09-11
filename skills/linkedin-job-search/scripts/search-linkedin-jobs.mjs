@@ -30,6 +30,22 @@
  *   - Per-page retries are capped at 3 attempts.
  *   - Circuit breaker: 3 (search) / 4 (detail) consecutive blocking states
  *     across an origin stop all further retries for that origin.
+ *
+ * Strict source mode (--strict-owner or LINKEDIN_STRICT_OWNER=1):
+ *   Source-owner admission (one port-free LinkedIn owner per workspace) runs
+ *   before any browser/CDP contact; denial = blocked summary, exit 2. One
+ *   source-wide strict retry policy stops the run on the first canonical
+ *   restriction, and every navigation reserves a slot immediately before
+ *   sending; pause/cancel/storage denial halts further admissions instead of
+ *   falling open. The first canonical restriction this run observes is
+ *   persisted as the source pause through the owner at the observation site
+ *   (summary.terminalStatuses.sourcePause records the outcome), before any
+ *   further admission and before release. Unflagged runs keep the legacy
+ *   lease/budget/policy path. In every mode each navigation URL is validated
+ *   against the LinkedIn jobs-route allowlist immediately before it is sent.
+ *   LINKEDIN_TARGET_BASE overrides the navigation base only for loopback
+ *   fixtures and requires LINKEDIN_ALLOW_LOCAL_TARGET=1; any other value
+ *   aborts startup.
  */
 
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
@@ -38,9 +54,9 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { startCdpKeepAlive } from './cdp-keepalive.mjs';
 import { createTargetRegistry, createCleanup } from './target-registry.mjs';
-import { detectLinkedInBlockPage, classifyLinkedInPage, PAGE_STATE, isBlockingState } from './linkedin-page-state.mjs';
-import { createRetryPolicy } from './retry-policy.mjs';
-import { tryAcquireLease, createSharedBudget } from './cdp-lease.mjs';
+import { detectLinkedInBlockPage, classifyLinkedInPage, PAGE_STATE, isBlockingState, isRestrictionState, RESTRICTION_STATES, researchNavigationDecision } from './linkedin-page-state.mjs';
+import { createRetryPolicy, createStrictSourceRetryPolicy } from './retry-policy.mjs';
+import { tryAcquireLease, createSharedBudget, tryAcquireStrictLinkedInOwner } from './cdp-lease.mjs';
 import {
   classifyRole as classifySharedRole,
   assertRoleClassification,
@@ -66,6 +82,81 @@ let targetRegistry = null;
 let cdpLease = null;
 let sharedBudget = null;
 let runCancelled = false;
+let sourceOwner = null;   // strict mode: the one LinkedIn source owner
+let sourceRetry = null;   // strict mode: shared source-wide retry policy
+let sourceHalted = false; // strict mode: admissions denied — stop, defer, do not fail open
+let sourcePause = null;   // strict mode: first restriction observed by this run and its persisted-pause result
+let targetBase = 'https://www.linkedin.com';
+
+const LOOPBACK_TARGET_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
+
+function sourceUrl(pathAndQuery) {
+  return targetBase + pathAndQuery;
+}
+
+function resolveTargetBase() {
+  const raw = process.env.LINKEDIN_TARGET_BASE;
+  if (!raw) return 'https://www.linkedin.com';
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`LINKEDIN_TARGET_BASE is not a valid URL (${raw}); unset it to use LinkedIn.`);
+  }
+  const loopback = LOOPBACK_TARGET_HOSTS.has(parsed.hostname);
+  if (process.env.LINKEDIN_ALLOW_LOCAL_TARGET === '1' && loopback) {
+    console.warn(`  [target-binding] Navigations bound to loopback fixture ${parsed.origin} — LinkedIn destinations are not reachable from this run.`);
+    return parsed.origin;
+  }
+  throw new Error(`LINKEDIN_TARGET_BASE rejected: only loopback hosts with LINKEDIN_ALLOW_LOCAL_TARGET=1 are allowed (got ${parsed.origin}). Unset it to use LinkedIn.`);
+}
+
+/**
+ * Every automated navigation is validated against the jobs-route allowlist
+ * at the seam where the URL is actually sent, in strict and legacy runs
+ * alike. Only the explicitly bound loopback fixture origin is exempt.
+ */
+function navigationDecision(url) {
+  const fixtureOrigins = targetBase === 'https://www.linkedin.com' ? [] : [targetBase];
+  return researchNavigationDecision(url, { fixtureOrigins });
+}
+
+/**
+ * Strict mode admission for one navigation: allowed route + reserved slot +
+ * unpaused source immediately before sending. Legacy (non-strict) runs only
+ * get the route check — per-process pacing is unchanged there.
+ */
+async function admitNavigation(url) {
+  const decision = navigationDecision(url);
+  if (!decision.allowed) {
+    if (sourceOwner) { sourceHalted = true; sourceOwner.abort(); }
+    console.warn(`  [navigation] Rejected ${decision.code}: ${decision.reason}`);
+    return { ok: false, reason: `navigation_${decision.code}` };
+  }
+  if (!sourceOwner) return { ok: true };
+  const slot = await sourceOwner.reserveRequest();
+  if (!slot.ok) {
+    sourceHalted = true;
+    sourceOwner.abort(); // stop queued waits immediately
+    console.warn(`  [source-owner] Navigation denied (${slot.stage}/${slot.reason}); halting further admissions and deferring remaining work.`);
+    return { ok: false, reason: slot.reason };
+  }
+  return { ok: true, used: slot.used };
+}
+
+/**
+ * Strict mode: the first canonical restriction observed by this run is
+ * persisted as the source pause at the observation site, before the owner
+ * releases and before any further admission. The wrapper's own pause on the
+ * child summary remains as a second writer; a repeated pause is idempotent.
+ */
+function noteSourceRestriction(state, reason) {
+  if (!sourceOwner || sourcePause || !isRestrictionState(state)) return;
+  const res = sourceOwner.pauseSource(`collector observed ${state}`);
+  sourcePause = { state, reason: reason || null, persisted: res.ok === true, error: res.ok ? null : (res.error?.code ?? 'PAUSE_UNAVAILABLE') };
+  sourceHalted = true;
+  console.warn(`  [source-owner] Restriction ${state} observed; pause ${sourcePause.persisted ? 'persisted' : `NOT persisted (${sourcePause.error})`}; halting further admissions.`);
+}
 
 function usage(exitCode = 0) {
   const out = exitCode === 0 ? process.stdout : process.stderr;
@@ -93,6 +184,8 @@ function usage(exitCode = 0) {
   out.write(`  --keepalive-seconds <n>       CDP heartbeat interval; 0 disables (default 15)\n`);
   out.write(`  --obscura-port <n>            browser CDP port to use/check (default ${DEFAULT_OBSCURA_PORT})\n`);
   out.write(`  --port <n>                    alias for --obscura-port\n`);
+  out.write(`  --strict-owner                run under the strict LinkedIn source owner: fail-closed admission before any CDP contact, one source-wide budget/retry policy, no fail-open fallback\n`);
+  out.write(`  --lock-dir <path>             strict-mode lease/budget storage dir (default $JOBHUNTER_HOME/locks)\n`);
   out.write(`  --db <path>                   SQLite DB file (default ${DEFAULT_DB})\n`);
   out.write(`  --session-json <path>         optional browser session export (default ${DEFAULT_SESSION_JSON})\n`);
   out.write(`  --cookie-file <path>          deprecated; ignored. Searches use browser CDP.\n`);
@@ -123,6 +216,8 @@ function parseArgs(argv) {
     refreshJobIds: [],
     startObscura: false,
     obscuraPort: DEFAULT_OBSCURA_PORT,
+    strictOwner: process.env.LINKEDIN_STRICT_OWNER === '1',
+    lockDir: process.env.LINKEDIN_LOCK_DIR || null,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -155,6 +250,8 @@ function parseArgs(argv) {
     else if (a === '--summary') o.summary = next();
     else if (a === '--refresh-job-ids') o.refreshJobIds = parseRefreshJobIds(next());
     else if (a === '--start-obscura') o.startObscura = true;
+    else if (a === '--strict-owner') o.strictOwner = true;
+    else if (a === '--lock-dir') o.lockDir = next();
     else if (a === '--help' || a === '-h') usage(0);
     else throw new Error(`Unknown argument: ${a}`);
   }
@@ -388,24 +485,33 @@ async function fetchQueryIds(client, query, opts, secret) {
   let queryStatus = PAGE_STATE.HEALTHY;
 
   const searchOrigin = 'linkedin.com';
-  const searchRp = createRetryPolicy({ maxRetries: 3, circuitBreakerThreshold: 3 });
+  // Strict mode shares the single source-wide policy; legacy keeps the
+  // per-query three-strike breaker.
+  const searchRp = sourceRetry ?? createRetryPolicy({ maxRetries: 3, circuitBreakerThreshold: 3 });
 
   for (let start = 0; start <= opts.maxStart; start += opts.pageStep) {
-    await enforceRateLimit();
     const fresh = opts.freshDays ? `&f_TPR=r${Math.round(opts.freshDays * 86400)}&sortBy=DD` : '';
-    const url = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(query)}&location=${encodeURIComponent(opts.location)}${fresh}&start=${start}`;
+    const url = sourceUrl(`/jobs/search/?keywords=${encodeURIComponent(query)}&location=${encodeURIComponent(opts.location)}${fresh}&start=${start}`);
 
-    // Check retry policy before fetching
+    // Check retry policy before reserving a slot, so a terminated source
+    // does not burn budget on pages it will never fetch.
     const decision = searchRp.canRetry(url, searchOrigin);
     if (!decision.allowed) {
       console.warn(`  [terminal] Search page start=${start}: ${decision.reason}`);
       queryStatus = searchRp.isCircuitBroken(searchOrigin) ? PAGE_STATE.BLOCKED : PAGE_STATE.TRANSIENT_ERROR;
       break;
     }
+    const admission = await admitNavigation(url);
+    if (!admission.ok) {
+      queryStatus = PAGE_STATE.BLOCKED;
+      break;
+    }
+    await enforceRateLimit();
 
     const result = await fetchSearchHtmlViaObscura(client, url, secret);
     const pageState = result.state || (result.blocked ? (result.isCaptcha ? PAGE_STATE.ACTIVE_CHALLENGE : PAGE_STATE.BLOCKED) : PAGE_STATE.HEALTHY);
     searchRp.recordResult(url, searchOrigin, pageState, result.error || null);
+    noteSourceRestriction(pageState, result.error || null);
 
     if (isBlockingState(pageState)) {
       if (result.isCaptcha) {
@@ -860,23 +966,31 @@ async function fetchJobTextViaCdp(client, url, opts) {
 }
 
 async function scrapeJob(client, id, secret, opts, queries, detailRp) {
-  const url = `https://www.linkedin.com/jobs/view/${id}`;
+  const url = sourceUrl(`/jobs/view/${id}`);
   const origin = 'linkedin.com';
   const MAX_ATTEMPTS = 10; // safety cap; retry policy gates below this
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    await enforceRateLimit();
+    if (sourceHalted) return failedJob(id, url, opts, queries, 'source_halted_before_attempt');
 
-    // Check retry policy before each attempt (skip check on first)
-    if (attempt > 1) {
+    // Check retry policy before each attempt and before reserving a slot.
+    // Legacy skips the check on the first attempt; strict mode checks every
+    // attempt so a restriction observed elsewhere in the source stops this
+    // fetch before it is sent.
+    if (attempt > 1 || sourceRetry) {
       const decision = detailRp.canRetry(url, origin);
       if (!decision.allowed) {
         console.warn(`  [terminal] Detail ${id}: ${decision.reason}`);
         return failedJob(id, url, opts, queries, `terminal: ${decision.reason}`);
       }
-      const backoff = backoffDelay(attempt - 1, 15000, 120000);
-      console.log(`  [detail-backoff] ${id} attempt=${attempt} waiting ${(backoff / 1000).toFixed(1)}s`);
-      await sleep(backoff);
+      if (attempt > 1) {
+        const backoff = backoffDelay(attempt - 1, 15000, 120000);
+        console.log(`  [detail-backoff] ${id} attempt=${attempt} waiting ${(backoff / 1000).toFixed(1)}s`);
+        await sleep(backoff);
+      }
     }
+    const admission = await admitNavigation(url);
+    if (!admission.ok) return failedJob(id, url, opts, queries, `source_halted: ${admission.reason}`);
+    await enforceRateLimit();
 
     try {
       const detail = await fetchJobTextViaCdp(client, url, opts);
@@ -884,6 +998,7 @@ async function scrapeJob(client, id, secret, opts, queries, detailRp) {
 
       if (detail.blocked) {
         detailRp.recordResult(url, origin, pageState, detail.blockReason || 'blocked');
+        noteSourceRestriction(pageState, detail.blockReason || 'blocked');
         if (detail.isCaptcha) {
           console.warn(`  [captcha] CAPTCHA on detail ${id}: ${detail.blockReason}`);
         } else if (pageState === PAGE_STATE.RATE_LIMITED) {
@@ -916,7 +1031,7 @@ async function scrapeJob(client, id, secret, opts, queries, detailRp) {
 }
 
 async function scrapeJobViaAuthenticatedCdp(client, id, secret, opts, queries) {
-  const url = `https://www.linkedin.com/jobs/view/${id}`;
+  const url = sourceUrl(`/jobs/view/${id}`);
   let targetId;
   try {
     const target = await withTimeout(client.send('Target.createTarget', { url: 'about:blank' }), 10000, 'Target.createTarget');
@@ -1223,27 +1338,67 @@ async function main() {
   process.once('SIGTERM', () => onCancel('SIGTERM'));
 
   const opts = parseArgs(process.argv.slice(2));
+  try {
+    targetBase = resolveTargetBase();
+  } catch (err) {
+    console.error(`Search aborted before any navigation: ${err.message}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (opts.strictOwner) {
+    // ── Strict source admission — before any browser or CDP contact ───
+    const ownerRes = await tryAcquireStrictLinkedInOwner({
+      dbPath: opts.db,
+      lockDir: opts.lockDir || path.join(JOBHUNTER_HOME, 'locks'),
+      runId: `${opts.role.replace(/\s+/g, '-')}-${Date.now()}`,
+    });
+    if (!ownerRes.ok) {
+      const summary = {
+        status: 'source_blocked',
+        stage: ownerRes.stage,
+        reason: ownerRes.reason,
+        detail: ownerRes.detail ?? null,
+        deferred: 'all — no navigation was attempted',
+        dbPath: opts.db,
+      };
+      writeFileSync(opts.summary, JSON.stringify(summary, null, 2));
+      console.warn(`  [source-owner] Blocked before navigation: ${ownerRes.stage}/${ownerRes.reason} — ${ownerRes.detail ?? ''}`);
+      console.warn('  [source-owner] Requested scope deferred; no CDP contact attempted.');
+      process.exitCode = 2;
+      return;
+    }
+    sourceOwner = ownerRes.owner;
+    sourceRetry = createStrictSourceRetryPolicy({ maxRetries: 3 });
+    console.log(`  [source-owner] Strict LinkedIn source owner acquired (identity: linkedin-source, access: ${sourceOwner.accessSource}).`);
+  }
+
   if (!existsSync(opts.sessionJson)) {
     writeFileSync(opts.sessionJson, JSON.stringify({ cookies: [], localStorage: {}, sessionStorage: {} }, null, 2));
   }
   ensureObscura(opts);
 
-  // ── Cross-process CDP coordination ────────────────────────────────
-  // Coordination, not prohibition: if another live run holds the lease we
-  // proceed without it (shared budget still throttles us collectively);
-  // we just cannot advertise our tab ownership in the lease file.
-  cdpLease = tryAcquireLease({
-    leaseName: `linkedin-search:${opts.obscuraPort}`,
-    runId: `${opts.role.replace(/\s+/g, '-')}-${Date.now()}`,
-  });
-  if (!cdpLease) {
-    console.warn('  [cdp-lease] Proceeding without lease — another run is active on this browser; shared budget still applies');
+  if (!opts.strictOwner) {
+    // ── Cross-process CDP coordination (legacy fail-open path) ────────
+    // Coordination, not prohibition: if another live run holds the lease we
+    // proceed without it (shared budget still throttles us collectively);
+    // we just cannot advertise our tab ownership in the lease file.
+    cdpLease = tryAcquireLease({
+      leaseName: `linkedin-search:${opts.obscuraPort}`,
+      runId: `${opts.role.replace(/\s+/g, '-')}-${Date.now()}`,
+    });
+    if (!cdpLease) {
+      console.warn('  [cdp-lease] Proceeding without lease — another run is active on this browser; shared budget still applies');
+    }
+    sharedBudget = createSharedBudget({
+      budgetName: `linkedin.com:${opts.obscuraPort}`,
+      windowMs: rateTracker.windowMs,
+      maxRequests: rateTracker.maxRequests,
+    });
+  } else {
+    // Strict mode owns the source through the one owner; no second lease and
+    // no per-process budget fallback — admissions go through the owner.
+    console.log('  [source-owner] budget identity: linkedin-source (shared source-wide, port-independent)');
   }
-  sharedBudget = createSharedBudget({
-    budgetName: `linkedin.com:${opts.obscuraPort}`,
-    windowMs: rateTracker.windowMs,
-    maxRequests: rateTracker.maxRequests,
-  });
 
   const queries = buildQueries(opts);
   console.log(`Searching LinkedIn via browser CDP: role="${opts.role}" location="${opts.location}" speaks="${opts.speaks.join(', ')}" port=${opts.obscuraPort} queries=${queries.length} detailMode=existing-cdp-text`);
@@ -1264,16 +1419,19 @@ async function main() {
     stopKeepalive: () => keepAlive.stop(),
     closeClient: () => client.close(),
   });
-  // Chain lease release into cleanup (after CDP teardown)
+  // Chain lease/owner release into cleanup (after CDP teardown)
   const innerCleanup = cleanupFn;
   cleanupFn = async () => {
     await innerCleanup();
+    if (sourceOwner) { sourceOwner.release(); sourceOwner = null; }
     if (cdpLease) { cdpLease.release(); cdpLease = null; }
     if (sharedBudget) { sharedBudget.destroy(); sharedBudget = null; }
   };
 
-  // Shared detail-page retry policy (all detail fetches share one circuit breaker)
-  const detailRp = createRetryPolicy({ maxRetries: 3, circuitBreakerThreshold: 4 });
+  // Shared detail-page retry policy. Legacy: all detail fetches share one
+  // circuit breaker. Strict: the run-wide source policy is shared by the
+  // search and detail phases so the first canonical restriction ends both.
+  const detailRp = sourceRetry ?? createRetryPolicy({ maxRetries: 3, circuitBreakerThreshold: 4 });
 
   let queryResults;
   let allRecords = [];
@@ -1309,6 +1467,21 @@ async function main() {
           failed: 0,
           persisted: 0,
           status: 'cancelled',
+        });
+        continue;
+      }
+      if (sourceHalted) {
+        // The source stopped admitting (pause, cancellation signal into the
+        // owner, or budget/storage failure). Remaining queries are deferred
+        // as durable stats, never fetched fail-open.
+        perQueryPersistStats.push({
+          query: qr.query,
+          idsTotal: qr.ids.length,
+          idsNew: 0,
+          scraped: 0,
+          failed: 0,
+          persisted: 0,
+          status: 'deferred_source_halted',
         });
         continue;
       }
@@ -1440,6 +1613,7 @@ async function main() {
     terminalStatuses: {
       searchQueries: queryStatuses,
       detailPages: { status: detailStatus, total: ids.length, scraped: scrapedRecords.length, failed: failedRecords.length, circuitBroken: detailCircuitBroken },
+      sourcePause: sourcePause ?? undefined,
     },
     queryStats: queryResults.map((q) => ({ query: q.query, family: getQueryFamily(q.query), uniqueIds: q.ids.length, pagesFetched: q.pages.length })),
     totalUniqueJobIds: ids.length,
@@ -1490,9 +1664,10 @@ async function main() {
   if (included.length > 12) console.log(`... ${included.length - 12} more included jobs in summary JSON`);
 
   // ── Exit code determination ───────────────────────────────────────
-  const terminalStates = new Set([PAGE_STATE.ACTIVE_CHALLENGE, PAGE_STATE.BLOCKED, PAGE_STATE.RATE_LIMITED, 'failed']);
+  const terminalStates = new Set([...RESTRICTION_STATES, 'failed']);
   const hasTerminal = queryStatuses.some((qs) => terminalStates.has(qs.status)) ||
-    (detailStatus === PAGE_STATE.BLOCKED || detailStatus === PAGE_STATE.ACTIVE_CHALLENGE);
+    (detailStatus === PAGE_STATE.BLOCKED || detailStatus === PAGE_STATE.ACTIVE_CHALLENGE) ||
+    sourceHalted;
   const persistFailed = perQueryPersistStats.some((s) => s.status === 'persist_failed');
 
   if (cancelled) {

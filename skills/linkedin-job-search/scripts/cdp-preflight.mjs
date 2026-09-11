@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 import http from 'node:http';
-import { classifyLinkedInPage } from './linkedin-page-state.mjs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { classifyLinkedInPage, PAGE_STATE, RESTRICTION_STATES, researchNavigationDecision } from './linkedin-page-state.mjs';
+import { DB_PATH } from '../../job-hunter/scripts/jh-common.mjs';
+import { readLinkedInAccess, pauseLinkedInAccess } from '../../job-hunter/scripts/linkedin-access.mjs';
+
+const restrictions = new Set(RESTRICTION_STATES);
 
 function parseArgs(argv) {
   const opts = {
@@ -10,6 +16,7 @@ function parseArgs(argv) {
     keepAliveSeconds: Number(process.env.CDP_KEEPALIVE_SECONDS || 15) || 15,
     probeUrls: [],
     waitMs: 3000,
+    db: process.env.JOBHUNTER_DB || DB_PATH,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -19,16 +26,25 @@ function parseArgs(argv) {
     };
     if (arg === '--port' || arg === '--cdp-port') opts.port = Number(next()) || opts.port;
     else if (arg === '--json') opts.json = true;
+    else if (arg === '--db') opts.db = next();
     else if (arg === '--watch-seconds') opts.watchSeconds = Math.max(0, Number(next()) || 0);
     else if (arg === '--keepalive-seconds') opts.keepAliveSeconds = Math.max(1, Number(next()) || 15);
     else if (arg === '--probe-url') opts.probeUrls.push(next());
     else if (arg === '--wait-ms') opts.waitMs = Math.max(500, Number(next()) || 3000);
-    else if (arg === '--help' || arg === '-h') {
-      console.log('Usage: cdp-preflight.mjs [--port 9225] [--json] [--probe-url URL] [--wait-ms 3000] [--watch-seconds N] [--keepalive-seconds N]');
-      process.exit(0);
-    } else throw new Error(`Unknown option: ${arg}`);
+    else if (arg === '--help' || arg === '-h') opts.help = true; else throw new Error(`Unknown option: ${arg}`);
   }
   return opts;
+}
+
+function siteForUrl(url) {
+  try {
+    const parsed = new URL(url);
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) return 'other';
+    const host = parsed.hostname;
+    if (['linkedin.com', 'www.linkedin.com'].includes(host)) return 'linkedin';
+    if (host === 'indeed.com' || host.endsWith('.indeed.com')) return 'indeed';
+  } catch {}
+  return 'other';
 }
 
 function requestJson(port, path, method = 'GET') {
@@ -53,7 +69,7 @@ function getJson(port, path) {
 }
 
 async function evaluateTarget(target) {
-  if (!target.webSocketDebuggerUrl) return null;
+  if (!target.webSocketDebuggerUrl) throw new Error('Target WebSocket is unavailable');
   const ws = new WebSocket(target.webSocketDebuggerUrl);
   const pending = new Map();
   let seq = 0;
@@ -146,48 +162,86 @@ async function browserKeepAlive(wsUrl, durationMs, intervalMs) {
   return { sent, failed };
 }
 
-async function main() {
-  const opts = parseArgs(process.argv.slice(2));
-  const version = await getJson(opts.port, '/json/version');
-  const targets = await getJson(opts.port, '/json/list');
-  const relevant = targets.filter((target) => target.type === 'page' && /linkedin\.com|indeed\.com/i.test(target.url || ''));
-  const pages = [];
-  for (const target of relevant) {
-    try {
-      const page = await evaluateTarget(target);
-      const site = /linkedin\.com/i.test(page?.url || target.url || '') ? 'linkedin' : 'indeed';
-      const check = site === 'linkedin' ? classifyLinkedInPage(page) : classifyIndeedPage(page);
-      pages.push({ site, state: check.state, reason: check.reason, title: page?.title || target.title, url: page?.url || target.url });
-    } catch (error) {
-      pages.push({ site: /linkedin\.com/i.test(target.url || '') ? 'linkedin' : 'indeed', state: 'error', reason: error.message, title: target.title, url: target.url });
+async function main(argv = process.argv.slice(2)) {
+  const opts = parseArgs(argv);
+  if (opts.help) {
+    console.log('Usage: cdp-preflight.mjs [--db PATH] [--port 9225] [--json] [--probe-url URL] [--wait-ms 3000] [--watch-seconds N] [--keepalive-seconds N]');
+    return 0;
+  }
+  const indeedOnly = opts.probeUrls.length > 0 && opts.probeUrls.every((url) => siteForUrl(url) === 'indeed');
+  if (!indeedOnly) {
+    const access = readLinkedInAccess(opts.db);
+    if (!access.ok || !access.allowed) {
+      console.log(JSON.stringify({ ok: false, admitted: false, code: access.ok ? 'SOURCE_PAUSED' : 'ACCESS_STATE_UNAVAILABLE', state: access.record?.state || null }));
+      return 3;
     }
   }
   for (const url of opts.probeUrls) {
+    if (siteForUrl(url) === 'indeed') continue;
+    const decision = researchNavigationDecision(url);
+    if (!decision.allowed) {
+      console.log(JSON.stringify({ ok: false, admitted: true, code: decision.code, reason: decision.reason }));
+      return 3;
+    }
+  }
+  const version = await getJson(opts.port, '/json/version');
+  const targets = await getJson(opts.port, '/json/list');
+  const relevant = targets.filter((target) => target.type === 'page' && (indeedOnly ? siteForUrl(target.url) === 'indeed' : siteForUrl(target.url) !== 'other'));
+  const pages = [];
+  let stopped = false;
+  let paused = false;
+  let accessError;
+  const observe = (site, page, metadata = {}) => {
+    let check = site === 'linkedin' ? classifyLinkedInPage(page) : classifyIndeedPage(page);
+    if (site === 'linkedin' && siteForUrl(page.url) === 'linkedin' && /^\/checkpoint(?:\/|$)/.test(new URL(page.url).pathname) && !restrictions.has(check.state)) {
+      check = { state: PAGE_STATE.BLOCKED, reason: 'LinkedIn checkpoint requires operator review' };
+    }
+    pages.push({ site, state: check.state, reason: check.reason, title: page.title, url: page.url, ...metadata });
+    if (site === 'linkedin' && restrictions.has(check.state)) {
+      const pause = pauseLinkedInAccess(opts.db, { reason: `preflight observed ${check.state}` });
+      stopped = true;
+      paused = pause.ok;
+      if (!pause.ok) accessError = pause.error.code;
+    }
+  };
+  for (const target of relevant) {
+    if (stopped) break;
+    const site = siteForUrl(target.url);
+    if (site === 'linkedin' && !researchNavigationDecision(target.url).allowed) {
+      if (/^\/(?:login|checkpoint|authwall)(?:\/|$)/.test(new URL(target.url).pathname)) observe(site, { title: target.title, url: target.url });
+      continue;
+    }
+    try {
+      const page = await evaluateTarget(target);
+      observe(site, { ...page, title: page?.title || target.title, url: page?.url || target.url });
+    } catch {
+      pages.push({ site, state: 'error', reason: 'Page evaluation failed', title: target.title, url: target.url });
+    }
+  }
+  for (const url of opts.probeUrls) {
+    if (stopped) break;
     let target;
+    const site = siteForUrl(url);
     try {
       target = await requestJson(opts.port, `/json/new?${encodeURIComponent(url)}`, 'PUT');
       await new Promise((resolve) => setTimeout(resolve, opts.waitMs));
       const page = await evaluateTarget(target);
-      const site = /linkedin\.com/i.test(page?.url || url) ? 'linkedin' : /indeed\.com/i.test(page?.url || url) ? 'indeed' : 'other';
-      const check = site === 'linkedin'
-        ? classifyLinkedInPage(page)
-        : site === 'indeed'
-          ? classifyIndeedPage(page)
-          : { state: page?.text ? 'healthy' : 'unknown', reason: page?.text ? null : 'No readable page body' };
-      pages.push({ site, state: check.state, reason: check.reason, title: page?.title || target.title, url: page?.url || url, probe: true });
-    } catch (error) {
-      pages.push({ site: /linkedin\.com/i.test(url) ? 'linkedin' : /indeed\.com/i.test(url) ? 'indeed' : 'other', state: 'error', reason: error.message, title: '', url, probe: true });
+      observe(site, { ...page, title: page?.title || target.title, url: page?.url || url }, { probe: true });
+    } catch {
+      pages.push({ site, state: 'error', reason: 'Probe evaluation failed', title: '', url, probe: true });
     } finally {
       if (target?.id) await requestJson(opts.port, `/json/close/${target.id}`, 'PUT').catch(() => {});
     }
   }
-  const heartbeat = await browserKeepAlive(
+  const heartbeat = stopped ? { sent: 0, failed: 0 } : await browserKeepAlive(
     version.webSocketDebuggerUrl,
     opts.watchSeconds * 1000,
     opts.keepAliveSeconds * 1000,
   );
   const result = {
-    ok: Boolean(version.webSocketDebuggerUrl) && !pages.some((page) => ['blocked', 'captcha', 'login_required', 'error'].includes(page.state)),
+    ok: Boolean(version.webSocketDebuggerUrl) && !stopped && !pages.some((page) => restrictions.has(page.state) || ['captcha', 'error'].includes(page.state)),
+    paused,
+    ...(accessError ? { accessError } : {}),
     port: opts.port,
     browser: version.Browser || version.browser || null,
     pageCount: targets.filter((target) => target.type === 'page').length,
@@ -200,10 +254,14 @@ async function main() {
     for (const page of pages) console.log(`${page.site.toUpperCase()} ${page.state}: ${page.title} — ${page.url}${page.reason ? ` — ${page.reason}` : ''}`);
     if (opts.watchSeconds) console.log(`Heartbeat: ${heartbeat.sent} sent, ${heartbeat.failed} failed`);
   }
-  process.exitCode = result.ok ? 0 : 3;
+  return result.ok ? 0 : 3;
 }
 
-main().catch((error) => {
-  console.error(JSON.stringify({ ok: false, error: error.message }));
-  process.exitCode = 2;
-});
+export { parseArgs, researchNavigationDecision, main };
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  main().then((code) => { process.exitCode = code; }).catch(() => {
+    console.error(JSON.stringify({ ok: false, error: 'CDP preflight failed' }));
+    process.exitCode = 2;
+  });
+}

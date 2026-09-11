@@ -17,11 +17,15 @@ None of these files are tracked in Git. `.gitignore` excludes them.
 
 ## Sensitive-File Exclusions
 
-The release-safety gate (`scripts/check-release-safety.mjs`) scans all tracked files and rejects:
+The release-safety gate (`scripts/check-release-safety.mjs`) scans repository content, excluding Git metadata, dependencies and generated `agent-output/`, and rejects:
 
 - Filepaths matching personal-data patterns (`.sqlite`, `.docx` outside `examples/`, `.env`, `personal-info`)
 - File content containing real email addresses, phone numbers, API keys, or tokens
 - Absolute host-specific paths (`/Users/`, `/home/`) in bundled skill files
+
+The maintainer-profile gate (`scripts/check-local-profile-leaks.mjs`) separately compares publishable text against the local profile cache and CV. At a Git worktree root, it checks tracked files and non-ignored untracked files. A tracked file remains checked even when it matches an ignore rule; ignored, untracked private evidence is not a publication candidate.
+
+Standalone export directories are scanned in full, retaining the existing metadata/dependency exclusions. If Git file enumeration fails, the gate also falls back to that conservative full scan. Diagnostics identify matched field names without printing their values. An unavailable maintainer cache produces an explicit skip, not a verified privacy result.
 
 ## Credential Handling
 

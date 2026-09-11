@@ -22,9 +22,11 @@ import { Database } from '../../job-hunter/scripts/workspace-dependencies.mjs';
 
 import { execFileSync, spawn } from 'node:child_process';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { startCdpKeepAlive } from './cdp-keepalive.mjs';
-import { detectLinkedInBlockPage } from './linkedin-page-state.mjs';
+import { classifyLinkedInPage, researchNavigationDecision } from './linkedin-page-state.mjs';
+import { readLinkedInAccess, pauseLinkedInAccess } from '../../job-hunter/scripts/linkedin-access.mjs';
 
 const JOBHUNTER_HOME = process.env.JOBHUNTER_HOME || path.join(process.env.HOME || process.cwd(), '.job-hunter');
 const DEFAULT_DB = process.env.JOBHUNTER_DB || path.join(JOBHUNTER_HOME, 'jobhunter.sqlite');
@@ -306,12 +308,6 @@ async function simulateScroll(client, sessionId) {
   }, sessionId).catch(() => {});
 }
 
-const detectBlockPage = detectLinkedInBlockPage;
-
-function backoffDelay(attempt, baseMs = 10000, maxMs = 120000) {
-  return Math.round(Math.min(baseMs * Math.pow(2, Math.min(attempt, 4)) + jitter(0, 3000), maxMs));
-}
-
 const rateTracker = { requests: [], windowMs: 60000, maxRequests: 12 };
 
 function noteRequest() {
@@ -384,17 +380,16 @@ async function connectCdp(opts) {
   return client;
 }
 
-async function mapLimit(items, limit, fn, interDelayMs = 0) {
+async function mapLimit(items, limit, fn, control, stagger) {
   const out = new Array(items.length);
   let next = 0;
   const workers = Array.from({ length: Math.min(limit, items.length || 1) }, async () => {
     while (true) {
+      if (control.restriction) return;
       const i = next++;
       if (i >= items.length) return;
-      if (interDelayMs > 0 && i > 0) {
-        const delayMs = Math.round(jitter(interDelayMs * 0.5, interDelayMs * 1.5));
-        await sleep(delayMs);
-      }
+      if (i > 0) await stagger(items[i]);
+      if (control.restriction) return;
       out[i] = await fn(items[i], i);
     }
   });
@@ -402,47 +397,94 @@ async function mapLimit(items, limit, fn, interDelayMs = 0) {
   return out;
 }
 
-async function fetchJobText(job, opts, client) {
-  const url = job.url || `https://www.linkedin.com/jobs/view/${job.job_id}`;
-  let targetId;
+function jobUrl(job) {
+  return job.url || `https://www.linkedin.com/jobs/view/${job.job_id}`;
+}
+
+// Loopback fixture origins are opt-in only (same contract as the collector):
+// LINKEDIN_TARGET_BASE must be a loopback origin and LINKEDIN_ALLOW_LOCAL_TARGET=1.
+function envFixtureOrigins() {
+  const raw = process.env.LINKEDIN_TARGET_BASE;
+  if (!raw || process.env.LINKEDIN_ALLOW_LOCAL_TARGET !== '1') return [];
   try {
+    const parsed = new URL(raw);
+    return ['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname) ? [parsed.origin] : [];
+  } catch {
+    return [];
+  }
+}
+
+function browserTransport(opts, client) {
+  return (job) => {
+    const url = jobUrl(job);
+    let targetId;
+    let sessionId;
     const timeoutMs = Math.max(5000, Number(opts.timeout || 25) * 1000);
-    const target = await withTimeout(client.send('Target.createTarget', { url: 'about:blank' }), 10000, 'Target.createTarget');
-    targetId = target.targetId;
-    const attached = await withTimeout(client.send('Target.attachToTarget', { targetId, flatten: true }), 10000, 'Target.attachToTarget');
-    const sessionId = attached.sessionId;
-    await withTimeout(client.send('Page.enable', {}, sessionId), 8000, 'Page.enable');
-    await withTimeout(client.send('Runtime.enable', {}, sessionId), 8000, 'Runtime.enable');
-    await injectAntiDetection(client, sessionId);
-    await humanDelay('batch-detail nav', 2000, 5000);
-    const nav = await withTimeout(client.send('Page.navigate', { url, referrer: 'https://www.linkedin.com/jobs/search/' }, sessionId), timeoutMs, 'Page.navigate');
-    if (nav.errorText) throw new Error(nav.errorText);
+    return {
+      async prepare() {
+        const target = await withTimeout(client.send('Target.createTarget', { url: 'about:blank' }), 10000, 'Target.createTarget');
+        targetId = target.targetId;
+        const attached = await withTimeout(client.send('Target.attachToTarget', { targetId, flatten: true }), 10000, 'Target.attachToTarget');
+        sessionId = attached.sessionId;
+        await withTimeout(client.send('Page.enable', {}, sessionId), 8000, 'Page.enable');
+        await withTimeout(client.send('Runtime.enable', {}, sessionId), 8000, 'Runtime.enable');
+        await injectAntiDetection(client, sessionId);
+        await humanDelay('batch-detail nav', 2000, 5000);
+      },
+      async navigate() {
+        const nav = await withTimeout(client.send('Page.navigate', { url, referrer: 'https://www.linkedin.com/jobs/search/' }, sessionId), timeoutMs, 'Page.navigate');
+        if (nav.errorText) throw new Error(nav.errorText);
 
-    await simulateMouseMovement(client, sessionId);
-    await simulateScroll(client, sessionId);
-    await humanDelay('batch-detail read', 3000, 6000);
+        await simulateMouseMovement(client, sessionId);
+        await simulateScroll(client, sessionId);
+        await humanDelay('batch-detail read', 3000, 6000);
+      },
+      async read(i) {
+        if (i > 0) await humanDelay('batch-detail retry', 2000, 4000);
+        const result = await withTimeout(client.send('Runtime.evaluate', {
+          expression: '({ text: document.body ? document.body.innerText : document.documentElement.innerText || "", title: document.title, url: location.href })',
+          returnByValue: true,
+          awaitPromise: true,
+        }, sessionId), timeoutMs, 'Runtime.evaluate');
+        return result.result?.value || { text: '', url };
+      },
+      async close() {
+        if (targetId) await client.send('Target.closeTarget', { targetId }).catch(() => {});
+      },
+    };
+  };
+}
 
-    let text = '';
+async function fetchJobText(job, transport, control, admitUrl) {
+  // Validate the stored destination before any target exists: only LinkedIn
+  // jobs routes (or the explicitly bound loopback fixture) may be navigated.
+  const decision = admitUrl(jobUrl(job));
+  if (!decision.allowed) return { excluded: true, code: decision.code, reason: decision.reason };
+  const page = transport(job);
+  try {
+    await page.prepare();
+    // No await may separate admission from the transport's navigation send.
+    if (control.restriction) return { deferred: true };
+    await page.navigate();
+    let snapshot;
     for (let i = 0; i < 18; i++) {
-      if (i > 0) await humanDelay('batch-detail retry', 2000, 4000);
-      const result = await withTimeout(client.send('Runtime.evaluate', {
-        expression: 'document.body ? document.body.innerText : document.documentElement.innerText || ""',
-        returnByValue: true,
-        awaitPromise: true,
-      }, sessionId), timeoutMs, 'Runtime.evaluate');
-      text = String(result.result?.value || '');
-      const block = detectBlockPage(text);
-      if (block.blocked) {
-        return { ok: true, text, url, blocked: true, isCaptcha: block.isCaptcha, blockReason: block.reason };
+      snapshot = await page.read(i);
+      const classification = classifyLinkedInPage(snapshot);
+      if (classification.blocked) {
+        const restriction = { source: job.source, job_id: job.job_id, state: classification.state, reason: classification.reason };
+        // Publish the first observation before asynchronous target cleanup,
+        // and persist the source pause at that same moment.
+        control.observe(restriction);
+        return { deferred: true, restriction };
       }
-      if (text.includes('Report this job') || text.includes('Seniority level') || text.includes('About the job')) break;
+      if (snapshot.text.includes('Report this job') || snapshot.text.includes('Seniority level') || snapshot.text.includes('About the job')) break;
     }
-    if (!text) throw new Error('empty detail page text');
-    return { ok: true, text, url, blocked: false, isCaptcha: false, blockReason: null };
+    if (!snapshot?.text) throw new Error('empty detail page text');
+    return { ok: true, ...snapshot };
   } catch (e) {
-    return { ok: false, text: '', url, error: e.message, blocked: false, isCaptcha: false, blockReason: null };
+    return { ok: false, text: '', error: e.message };
   } finally {
-    if (targetId) await client.send('Target.closeTarget', { targetId }).catch(() => {});
+    await page.close().catch(() => {});
   }
 }
 
@@ -657,77 +699,74 @@ function makeUpdater(db) {
   });
 }
 
-async function processJob(job, opts, client) {
-  let blockAttempt = 0;
-  while (true) {
-    await enforceRateLimit();
-    const fetched = await fetchJobText(job, opts, client);
+async function processJob(job, opts, transport, control, rateLimit, admitUrl) {
+  if (control.restriction) return { job, deferred: true };
+  await rateLimit(job);
+  if (control.restriction) return { job, deferred: true };
+  const fetched = await fetchJobText(job, transport, control, admitUrl);
+  if (fetched.deferred || fetched.excluded) return { job, ...fetched };
 
-    if (fetched.blocked) {
-      blockAttempt++;
-      if (fetched.isCaptcha) {
-        console.warn(`  [captcha] CAPTCHA on detail ${job.job_id}: ${fetched.blockReason}`);
-      } else {
-        console.warn(`  [blocked] LinkedIn warning on detail ${job.job_id}: ${fetched.blockReason}`);
-      }
-      const backoff = backoffDelay(blockAttempt, 15000, 120000);
-      console.warn(`  [batch-backoff] ${job.job_id} attempt=${blockAttempt} waiting ${(backoff / 1000).toFixed(1)}s`);
-      await sleep(backoff);
-      continue;
-    }
+  const jd = extractJD(fetched.text);
+  const requirements = jd ? parseLanguages(jd) : { required: [], niceToHave: [] };
 
-    const jd = extractJD(fetched.text);
-    const requirements = jd ? parseLanguages(jd) : { required: [], niceToHave: [] };
+  if (!fetched.ok) {
+    return {
+      job,
+      jd: null,
+      raw: fetched.text ? fetched.text.slice(0, 10000) : null,
+      requirements,
+      pass: false,
+      reason: `FAIL: Error fetching page: ${fetched.error}`,
+    };
+  }
 
-    if (!fetched.ok) {
-      return {
-        job,
-        jd: null,
-        raw: fetched.text ? fetched.text.slice(0, 10000) : null,
-        requirements,
-        pass: false,
-        reason: `FAIL: Error fetching page: ${fetched.error}`,
-      };
-    }
+  if (!jd) {
+    return {
+      job,
+      jd: null,
+      raw: fetched.text ? fetched.text.slice(0, 10000) : null,
+      requirements,
+      pass: false,
+      reason: 'FAIL: Could not extract JD from page',
+    };
+  }
 
-    if (!jd) {
-      return {
-        job,
-        jd: null,
-        raw: fetched.text ? fetched.text.slice(0, 10000) : null,
-        requirements,
-        pass: false,
-        reason: 'FAIL: Could not extract JD from page',
-      };
-    }
-
-    const titleCheck = checkTitle(job.title);
-    if (!titleCheck.pass) {
-      return {
-        job,
-        jd,
-        raw: jd,
-        requirements,
-        pass: false,
-        reason: titleCheck.reason,
-      };
-    }
-
-    const languageCheck = checkLanguageFilter(requirements, opts);
-    const suffix = requirements.niceToHave.length ? ` Nice-to-have: ${requirements.niceToHave.join(', ')}.` : '';
+  const titleCheck = checkTitle(job.title);
+  if (!titleCheck.pass) {
     return {
       job,
       jd,
       raw: jd,
       requirements,
-      pass: languageCheck.pass,
-      reason: `${languageCheck.reason}.${suffix}`.replace('..', '.'),
+      pass: false,
+      reason: titleCheck.reason,
     };
   }
+
+  const languageCheck = checkLanguageFilter(requirements, opts);
+  const suffix = requirements.niceToHave.length ? ` Nice-to-have: ${requirements.niceToHave.join(', ')}.` : '';
+  return {
+    job,
+    jd,
+    raw: jd,
+    requirements,
+    pass: languageCheck.pass,
+    reason: `${languageCheck.reason}.${suffix}`.replace('..', '.'),
+  };
 }
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  // Persisted LinkedIn access gate: before any output, browser probe or CDP
+  // contact. A paused, missing or unreadable state stops the backfill.
+  const access = readLinkedInAccess(opts.db);
+  if (!access.ok || !access.allowed) {
+    const code = access.ok ? 'SOURCE_PAUSED' : 'ACCESS_STATE_UNAVAILABLE';
+    const reason = access.ok ? 'LinkedIn research is paused' : 'LinkedIn access state is unavailable';
+    console.log(JSON.stringify({ ok: false, blocked: true, code, reason }));
+    process.exitCode = 2;
+    return;
+  }
   console.log('Batch JD backfill started');
   console.log(`DB: ${opts.db}`);
   console.log(`Source: ${opts.source}`);
@@ -744,27 +783,76 @@ async function main() {
     onFailure: (error) => console.warn(`[cdp] heartbeat failed: ${error.message}`),
   });
 
-  const db = new Database(opts.db);
-  ensureTables(db);
-  const jobs = db.prepare(buildJobQuery(opts)).all({ source: opts.source, limit: opts.limit });
-  console.log(`Found ${jobs.length} job(s) to process.`);
+  let db;
+  try {
+    db = new Database(opts.db);
+    ensureTables(db);
+    const jobs = db.prepare(buildJobQuery(opts)).all({ source: opts.source, limit: opts.limit });
+    console.log(`Found ${jobs.length} job(s) to process.`);
 
-  if (!jobs.length) {
+    const totals = await runBackfill({ jobs, opts, db, client });
+    console.log('\n=== Summary ===');
+    console.log(`Total processed: ${totals.processed}`);
+    console.log(`Passed language filter: ${totals.passed}`);
+    console.log(`Failed language/title/JD filter: ${totals.failed}`);
+    console.log(`Fetch errors: ${totals.errors}`);
+    console.log(`SQLite rows updated: ${totals.written}`);
+    console.log(`Deferred IDs: ${totals.deferredIds.join(', ') || '(none)'}`);
+    console.log(`Excluded destinations: ${totals.excluded}`);
+    if (totals.restriction) {
+      console.warn(`Stopped: ${totals.restriction.state}: ${totals.restriction.reason} (job ${totals.restriction.job_id})`);
+      console.warn(`LinkedIn pause ${totals.pause?.ok ? 'persisted' : `NOT persisted (${totals.pause?.error?.code ?? 'unknown'})`}`);
+    }
+  } finally {
     keepAlive.stop();
     client.close();
-    db.close();
-    return;
+    db?.close();
   }
+}
 
-  const update = makeUpdater(db);
-  const totals = { processed: 0, passed: 0, failed: 0, errors: 0, written: 0 };
+export async function runBackfill({ jobs, opts, db, client,
+  transport = browserTransport(opts, client),
+  rateLimit = enforceRateLimit,
+  stagger = () => sleep(Math.round(jitter(2500, 7500))),
+  betweenBatches = () => humanDelay('between batches', 5000, 10000),
+  log = console.log,
+  fixtureOrigins = envFixtureOrigins(),
+  admitUrl = (url) => researchNavigationDecision(url, { fixtureOrigins }),
+  pause = (restriction) => pauseLinkedInAccess(opts.db, { reason: `backfill observed ${restriction.state}` }),
+}) {
+  const update = !opts.dryRun && jobs.length ? makeUpdater(db) : null;
+  const control = {
+    restriction: null,
+    pause: null,
+    // First observation wins; the pause is written synchronously here, before
+    // any target cleanup or further admission.
+    observe(restriction) {
+      if (control.restriction) return;
+      control.restriction = restriction;
+      try { control.pause = pause(restriction); }
+      catch { control.pause = { ok: false, allowed: false, record: null, error: { code: 'STORAGE_ERROR', message: 'Pause write threw' } }; }
+    },
+  };
+  const totals = { processed: 0, passed: 0, failed: 0, errors: 0, written: 0, excluded: 0, results: [], deferredIds: [], restriction: null, pause: null };
+  const completed = new Set();
 
   for (let i = 0; i < jobs.length; i += opts.batchSize) {
+    if (control.restriction) break;
     const batch = jobs.slice(i, i + opts.batchSize);
-    console.log(`\nBatch ${Math.floor(i / opts.batchSize) + 1}: fetching ${batch.length} job detail page(s)...`);
-    const results = await mapLimit(batch, opts.batchSize, (job) => processJob(job, opts, client), 5000);
+    log(`\nBatch ${Math.floor(i / opts.batchSize) + 1}: fetching ${batch.length} job detail page(s)...`);
+    const results = await mapLimit(batch, opts.batchSize, (job) => processJob(job, opts, transport, control, rateLimit, admitUrl), control, stagger);
 
     for (const result of results) {
+      if (!result || result.deferred) continue;
+      completed.add(result.job);
+      if (result.excluded) {
+        // Rejected destination: never navigated, never written; reported.
+        totals.excluded++;
+        totals.results.push(result);
+        log(`  [excluded] ${result.job.job_id}: ${result.code} — ${result.reason}`);
+        continue;
+      }
+      totals.results.push(result);
       totals.processed++;
       if (result.pass) totals.passed++;
       else totals.failed++;
@@ -780,26 +868,25 @@ async function main() {
       const company = result.job.company ? ` @ ${result.job.company}` : '';
       const langs = [...result.requirements.required.map((l) => `${l}:required`), ...result.requirements.niceToHave.map((l) => `${l}:nice`)];
       const langText = langs.length ? ` [${langs.join(', ')}]` : '';
-      console.log(`  [${totals.processed}/${jobs.length}] ${mark} ${title}${company} — ${result.reason}${langText}`);
+      log(`  [${totals.processed}/${jobs.length}] ${mark} ${title}${company} — ${result.reason}${langText}`);
     }
 
-    if (i + opts.batchSize < jobs.length) {
-      await humanDelay('between batches', 5000, 10000);
+    if (!control.restriction && i + opts.batchSize < jobs.length) {
+      await betweenBatches();
     }
   }
 
-  keepAlive.stop();
-  client.close();
-  db.close();
-  console.log('\n=== Summary ===');
-  console.log(`Total processed: ${totals.processed}`);
-  console.log(`Passed language filter: ${totals.passed}`);
-  console.log(`Failed language/title/JD filter: ${totals.failed}`);
-  console.log(`Fetch errors: ${totals.errors}`);
-  console.log(`SQLite rows updated: ${totals.written}`);
+  totals.restriction = control.restriction;
+  totals.pause = control.pause;
+  for (const job of jobs) {
+    if (completed.has(job)) continue;
+    totals.deferredIds.push(job.job_id);
+    totals.results.push({ job, deferred: true, restriction: control.restriction });
+  }
+  return totals;
 }
 
-main().catch((error) => {
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch((error) => {
   console.error(error?.stack || error?.message || String(error));
   process.exit(1);
 });
